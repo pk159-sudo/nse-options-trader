@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "path";
+import { promises as fs } from "fs";
 import path from "path";
 
 // ===== Each snapshot is saved as individual JSON file =====
-// File naming: snapshot-{timestamp}.json  (e.g. snapshot-2026-05-27T05-09-23-560Z.json)
-// Only last 2 snapshots are kept per symbol+expiry, older ones are deleted automatically.
-// This avoids the growing CSV problem — no matter how many refreshes, max 2 files on disk.
+// File naming: snapshot-{timestamp}.json (e.g. snapshot-2026-05-27T05-09-23-560Z.json)
+// All snapshots are kept permanently for backtesting.
+// For delta calculation, only the last 2 (latest) snapshots are compared.
+//
+// Why individual files instead of single CSV?
+// - CSV grows to ~109 MB/month, reading entire file every 30s kills performance
+// - Individual files: POST writes 1 small file + reads only 2 small files for delta
+// - GET with ?limit=2 reads only 2 files, not thousands of rows
+// - All historical data preserved for backtesting
+//
+// Disk usage: ~7 KB per snapshot × 750/day × 22 days ≈ 115 MB/month (same as CSV)
+// But performance stays constant — always O(1) file reads for delta, never O(n)
 
 type OISnapshot = {
   timestamp: string;
@@ -32,23 +41,28 @@ function getDirPath(symbol: string, expiry: string) {
   return path.join(SNAPSHOT_ROOT, safeName(symbol), safeName(expiry));
 }
 
-// Convert ISO timestamp to safe filename: "2026-05-27T05:09:23.560Z" → "2026-05-27T05-09-23-560Z"
+// "2026-05-27T05:09:23.560Z" → "snapshot-2026-05-27T05-09-23-560Z.json"
 function timestampToFilename(ts: string) {
   return `snapshot-${ts.replace(/[:.]/g, "-")}.json`;
 }
 
+// List snapshot files sorted chronologically (oldest first, newest last)
 async function listSnapshotFiles(dirPath: string): Promise<string[]> {
   try {
     const files = await fs.readdir(dirPath);
     return files
       .filter((f) => f.startsWith("snapshot-") && f.endsWith(".json"))
-      .sort(); // chronological order (newest last)
+      .sort();
   } catch {
     return [];
   }
 }
 
-async function readSnapshotFile(dirPath: string, filename: string, symbol: string): Promise<SnapshotRow | null> {
+async function readSnapshotFile(
+  dirPath: string,
+  filename: string,
+  symbol: string
+): Promise<SnapshotRow | null> {
   try {
     const content = await fs.readFile(path.join(dirPath, filename), "utf-8");
     const data = JSON.parse(content) as OISnapshot;
@@ -66,14 +80,17 @@ export async function GET(request: NextRequest) {
   const limit = limitParam ? Number(limitParam) : Infinity;
 
   if (!symbol || !expiry) {
-    return NextResponse.json({ error: "symbol and expiry are required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "symbol and expiry are required" },
+      { status: 400 }
+    );
   }
 
   const dirPath = getDirPath(symbol, expiry);
   const files = await listSnapshotFiles(dirPath);
 
-  // Take last N files (newest)
-  const selectedFiles = limit === Infinity ? files : files.slice(-limit);
+  // Take last N files (newest first in response)
+  const selectedFiles = files.slice(-limit);
 
   const snapshots: SnapshotRow[] = [];
   for (const file of selectedFiles) {
@@ -94,30 +111,32 @@ export async function POST(request: NextRequest) {
     strikes?: OISnapshot["strikes"];
   };
 
-  if (!symbol || !expiry || !timestamp || typeof spotPrice !== "number" || !Array.isArray(strikes)) {
+  if (
+    !symbol ||
+    !expiry ||
+    !timestamp ||
+    typeof spotPrice !== "number" ||
+    !Array.isArray(strikes)
+  ) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
   const dirPath = getDirPath(symbol, expiry);
   await fs.mkdir(dirPath, { recursive: true });
 
-  // 1. Save new snapshot as individual JSON file
+  // 1. Save new snapshot as individual JSON file (append, never overwrite history)
   const snapshotData: OISnapshot = { timestamp, expiry, spotPrice, strikes };
   const filename = timestampToFilename(timestamp);
-  await fs.writeFile(path.join(dirPath, filename), JSON.stringify(snapshotData), "utf-8");
+  await fs.writeFile(
+    path.join(dirPath, filename),
+    JSON.stringify(snapshotData),
+    "utf-8"
+  );
 
-  // 2. List all snapshot files, delete all except last 2
+  // 2. List all files, pick only last 2 for delta comparison
+  // No deletion — all snapshots kept for backtesting
   const allFiles = await listSnapshotFiles(dirPath);
-  if (allFiles.length > 2) {
-    const toDelete = allFiles.slice(0, allFiles.length - 2);
-    await Promise.all(
-      toDelete.map((f) => fs.unlink(path.join(dirPath, f)).catch(() => {}))
-    );
-  }
-
-  // 3. Read last 2 snapshots and return (caller uses these for delta calculation)
-  const remainingFiles = await listSnapshotFiles(dirPath);
-  const lastTwoFiles = remainingFiles.slice(-2);
+  const lastTwoFiles = allFiles.slice(-2);
 
   const snapshots: SnapshotRow[] = [];
   for (const file of lastTwoFiles) {
