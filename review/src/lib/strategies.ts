@@ -14,6 +14,7 @@ export interface StrategyLegDef {
   optionType: "CE" | "PE";
   strikeOffset: number; // offset from ATM (0 = ATM, +1 = 1 strike above, etc.)
   name: string;
+  quantityMultiplier?: number;
 }
 
 export const STRATEGIES: StrategyDefinition[] = [
@@ -160,3 +161,60 @@ export const STRATEGIES: StrategyDefinition[] = [
     ],
   },
 ];
+
+// Strategy P&L Calculator
+export interface StrategyLeg {
+  action: "BUY" | "SELL";
+  optionType: "CE" | "PE";
+  strikePrice: number;
+  premium: number;
+  quantity: number;
+}
+
+export interface StrategyPayoff {
+  spotPrices: number[];
+  pnl: number[];
+  maxProfit: number;
+  maxLoss: number;
+  breakevens: number[];
+}
+
+export function calculateStrategyPayoff(
+  legs: StrategyLeg[],
+  spotRange: { min: number; max: number; step: number }
+): StrategyPayoff {
+  const spotPrices: number[] = [];
+  for (let s = spotRange.min; s <= spotRange.max; s += spotRange.step) {
+    spotPrices.push(s);
+  }
+
+  const pnl: number[] = spotPrices.map((spot) => {
+    let totalPnL = 0;
+    for (const leg of legs) {
+      const intrinsic =
+        leg.optionType === "CE"
+          ? Math.max(0, spot - leg.strikePrice)
+          : Math.max(0, leg.strikePrice - spot);
+      const legPnL = leg.action === "BUY" ? intrinsic - leg.premium : leg.premium - intrinsic;
+      totalPnL += legPnL * leg.quantity;
+    }
+    return totalPnL;
+  });
+
+  const maxProfit = Math.max(...pnl);
+  const maxLoss = Math.min(...pnl);
+
+  const breakevens: number[] = [];
+  for (let i = 1; i < pnl.length; i++) {
+    if ((pnl[i - 1] <= 0 && pnl[i] >= 0) || (pnl[i - 1] >= 0 && pnl[i] <= 0)) {
+      const s1 = spotPrices[i - 1];
+      const s2 = spotPrices[i];
+      const p1 = pnl[i - 1];
+      const p2 = pnl[i];
+      const be = s1 + ((-p1) * (s2 - s1)) / (p2 - p1);
+      breakevens.push(Math.round(be * 100) / 100);
+    }
+  }
+
+  return { spotPrices, pnl, maxProfit, maxLoss, breakevens };
+}

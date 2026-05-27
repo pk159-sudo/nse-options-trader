@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchOptionChainV3, calculatePCR, calculateMaxPain, getATMStrike } from "@/lib/nse";
+import { fetchOptionChainV3, calculatePCR, calculateMaxPain, getATMStrike, daysToExpiry } from "@/lib/nse";
 import type { NSESymbol } from "@/lib/nse";
-import { daysToExpiry } from "@/lib/greeks";
 
 // Server-side cache for stale-while-revalidate pattern
 let cachedData: Record<string, { data: unknown; timestamp: number }> = {};

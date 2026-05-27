@@ -21,15 +21,14 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
-import { calculateStrategyPayoff } from "@/lib/greeks";
-import type { StrategyLeg } from "@/lib/greeks";
-import { STRATEGIES } from "@/lib/strategies";
+import { calculateStrategyPayoff, STRATEGIES } from "@/lib/strategies";
+import type { StrategyLeg } from "@/lib/strategies";
 import { useNSEStore } from "@/store/nse-store";
 import { formatPrice, formatIndianNumber } from "@/lib/nse";
 import { Brain, TrendingUp, TrendingDown, Minus, AlertTriangle, Info } from "lucide-react";
 
 const LOT_SIZES: Record<string, number> = {
-  NIFTY: 25,
+  NIFTY: 65,
   BANKNIFTY: 15,
   FINNIFTY: 25,
   NIFTYIT: 25,

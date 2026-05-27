@@ -312,3 +312,18 @@ export function formatIndianNumber(num: number): string {
 export function formatPrice(price: number): string {
   return price.toFixed(2);
 }
+
+// Calculate days to expiry
+export function daysToExpiry(expiryDate: string): number {
+  const now = new Date();
+  const expiry = new Date(expiryDate);
+
+  if (expiry < now) return 0;
+
+  // NSE expires at 3:30 PM IST
+  expiry.setHours(15, 30, 0, 0);
+  now.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+
+  const diffMs = expiry.getTime() - now.getTime();
+  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+}

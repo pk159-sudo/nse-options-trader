@@ -48,7 +48,6 @@ import {
   Cell,
 } from "recharts";
 import { formatIndianNumber, formatPrice } from "@/lib/nse";
-import { GreeksCalculator } from "@/components/nse/greeks-calculator";
 import { OISummaryPanel } from "@/components/nse/oi-summary";
 import { SignalsPanel } from "@/components/nse/signals-panel";
 import { AccountConnector } from "@/components/nse/account-connector";
