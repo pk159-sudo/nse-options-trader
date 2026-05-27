@@ -572,15 +572,7 @@ export default function NSEOptionsTool() {
 
   useEffect(() => {
     checkMarketHours();
-    const timer = setInterval(() => {
-      const now = new Date();
-      const h = now.getHours();
-      const m = now.getMinutes();
-      // Only check market hours after 3:25 PM
-      if (h > 15 || (h === 15 && m >= 25)) {
-        checkMarketHours();
-      }
-    }, 60000); // Check every minute after 3:25 PM
+    const timer = setInterval(checkMarketHours, 60000); // Check every minute always
     return () => clearInterval(timer);
   }, [checkMarketHours]);
 

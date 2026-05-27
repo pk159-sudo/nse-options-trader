@@ -520,11 +520,6 @@ function scanSignalsFallback(
   return signals;
 }
 
-function formatPlain(n: number): string {
-  if (Math.abs(n) >= 1e6) return n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-  return n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-}
-
 function checkExitConditions(
   currentChain: OptionData[],
   openTrades: Trade[]
@@ -952,8 +947,20 @@ export const useNSEStore = create<NSEStore>()(
         // Keep all signals for display
         const allSignals = [...get().signals, ...newSignals].slice(-20);
 
+        // Only save trades that actually changed to prevent unbounded JSONL growth
+        const prevTradesMap = new Map<string, Trade>();
+        for (const t of trades) prevTradesMap.set(t.id, t);
         for (const trade of updatedTrades) {
-          void get().saveTradeToFile(trade);
+          const prev = prevTradesMap.get(trade.id);
+          if (!prev) {
+            // New trade — must save
+            void get().saveTradeToFile(trade);
+          } else if (prev.status !== trade.status || prev.exitPrice !== trade.exitPrice ||
+                     prev.currentStop !== trade.currentStop || prev.pnl !== trade.pnl ||
+                     prev.priceHistory.length !== trade.priceHistory.length) {
+            // Trade state changed — save
+            void get().saveTradeToFile(trade);
+          }
         }
 
         set({
