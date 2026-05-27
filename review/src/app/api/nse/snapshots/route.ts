@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
+import { promises as fs } from "path";
 import path from "path";
+
+// ===== Each snapshot is saved as individual JSON file =====
+// File naming: snapshot-{timestamp}.json  (e.g. snapshot-2026-05-27T05-09-23-560Z.json)
+// Only last 2 snapshots are kept per symbol+expiry, older ones are deleted automatically.
+// This avoids the growing CSV problem — no matter how many refreshes, max 2 files on disk.
 
 type OISnapshot = {
   timestamp: string;
@@ -17,60 +22,39 @@ type OISnapshot = {
 
 type SnapshotRow = OISnapshot & { symbol: string };
 
-const CSV_ROOT = path.join(process.cwd(), "data", "snapshots");
-const CSV_HEADER = "timestamp,symbol,expiry,spotPrice,strikesJson\n";
+const SNAPSHOT_ROOT = path.join(process.cwd(), "data", "snapshots");
 
 function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function getCsvPath(symbol: string, expiry: string) {
-  return path.join(CSV_ROOT, safeName(symbol), safeName(expiry), "snapshots.csv");
+function getDirPath(symbol: string, expiry: string) {
+  return path.join(SNAPSHOT_ROOT, safeName(symbol), safeName(expiry));
 }
 
-async function ensureCsvFile(symbol: string, expiry: string) {
-  const csvPath = getCsvPath(symbol, expiry);
-  await fs.mkdir(path.dirname(csvPath), { recursive: true });
-  try {
-    await fs.access(csvPath);
-  } catch {
-    await fs.writeFile(csvPath, CSV_HEADER, "utf-8");
-  }
+// Convert ISO timestamp to safe filename: "2026-05-27T05:09:23.560Z" → "2026-05-27T05-09-23-560Z"
+function timestampToFilename(ts: string) {
+  return `snapshot-${ts.replace(/[:.]/g, "-")}.json`;
 }
 
-function parseCsvLine(line: string): SnapshotRow | null {
-  const parts = line.split(",");
-  if (parts.length < 5) return null;
-  const [timestamp, symbol, expiry, spotPrice, ...rest] = parts;
-  const strikesJson = rest.join(",");
+async function listSnapshotFiles(dirPath: string): Promise<string[]> {
   try {
-    const strikes = JSON.parse(strikesJson);
-    return {
-      timestamp,
-      symbol,
-      expiry,
-      spotPrice: Number(spotPrice),
-      strikes,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function readCsvRows(symbol: string, expiry: string): Promise<SnapshotRow[]> {
-  try {
-    const csvPath = getCsvPath(symbol, expiry);
-    await ensureCsvFile(symbol, expiry);
-    const content = await fs.readFile(csvPath, "utf-8");
-    return content
-      .split("\n")
-      .slice(1)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map(parseCsvLine)
-      .filter((row): row is SnapshotRow => row !== null);
+    const files = await fs.readdir(dirPath);
+    return files
+      .filter((f) => f.startsWith("snapshot-") && f.endsWith(".json"))
+      .sort(); // chronological order (newest last)
   } catch {
     return [];
+  }
+}
+
+async function readSnapshotFile(dirPath: string, filename: string, symbol: string): Promise<SnapshotRow | null> {
+  try {
+    const content = await fs.readFile(path.join(dirPath, filename), "utf-8");
+    const data = JSON.parse(content) as OISnapshot;
+    return { ...data, symbol };
+  } catch {
+    return null;
   }
 }
 
@@ -85,8 +69,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "symbol and expiry are required" }, { status: 400 });
   }
 
-  const rows = await readCsvRows(symbol, expiry);
-  const snapshots = limit === Infinity ? rows : rows.slice(-limit);
+  const dirPath = getDirPath(symbol, expiry);
+  const files = await listSnapshotFiles(dirPath);
+
+  // Take last N files (newest)
+  const selectedFiles = limit === Infinity ? files : files.slice(-limit);
+
+  const snapshots: SnapshotRow[] = [];
+  for (const file of selectedFiles) {
+    const row = await readSnapshotFile(dirPath, file, symbol);
+    if (row) snapshots.push(row);
+  }
+
   return NextResponse.json({ snapshots });
 }
 
@@ -97,29 +91,39 @@ export async function POST(request: NextRequest) {
     expiry?: string;
     timestamp?: string;
     spotPrice?: number;
-    strikes?: SnapshotRow["strikes"];
+    strikes?: OISnapshot["strikes"];
   };
 
   if (!symbol || !expiry || !timestamp || typeof spotPrice !== "number" || !Array.isArray(strikes)) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const csvPath = getCsvPath(symbol, expiry);
-  await ensureCsvFile(symbol, expiry);
+  const dirPath = getDirPath(symbol, expiry);
+  await fs.mkdir(dirPath, { recursive: true });
 
-  const line = [
-    timestamp,
-    symbol,
-    expiry,
-    String(spotPrice),
-    JSON.stringify(strikes),
-  ].join(",");
+  // 1. Save new snapshot as individual JSON file
+  const snapshotData: OISnapshot = { timestamp, expiry, spotPrice, strikes };
+  const filename = timestampToFilename(timestamp);
+  await fs.writeFile(path.join(dirPath, filename), JSON.stringify(snapshotData), "utf-8");
 
-  await fs.appendFile(csvPath, `${line}\n`, "utf-8");
+  // 2. List all snapshot files, delete all except last 2
+  const allFiles = await listSnapshotFiles(dirPath);
+  if (allFiles.length > 2) {
+    const toDelete = allFiles.slice(0, allFiles.length - 2);
+    await Promise.all(
+      toDelete.map((f) => fs.unlink(path.join(dirPath, f)).catch(() => {}))
+    );
+  }
 
-  // Read back the last two snapshots and return them to caller to avoid
-  // race conditions where the client posts then immediately reads.
-  const allRows = await readCsvRows(symbol, expiry);
-  const lastTwo = allRows.slice(-2);
-  return NextResponse.json({ success: true, snapshots: lastTwo });
+  // 3. Read last 2 snapshots and return (caller uses these for delta calculation)
+  const remainingFiles = await listSnapshotFiles(dirPath);
+  const lastTwoFiles = remainingFiles.slice(-2);
+
+  const snapshots: SnapshotRow[] = [];
+  for (const file of lastTwoFiles) {
+    const row = await readSnapshotFile(dirPath, file, symbol);
+    if (row) snapshots.push(row);
+  }
+
+  return NextResponse.json({ success: true, snapshots });
 }
