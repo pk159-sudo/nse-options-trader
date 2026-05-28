@@ -775,7 +775,19 @@ export const useNSEStore = create<NSEStore>()(
   fetchOptionChain: async (forceRefresh = false) => {
     const { selectedSymbol, selectedExpiry, snapshots, oiThreshold, trades } = get();
     if (!selectedExpiry) return;
-    // Note: We allow auto-fetch even when market is closed (shows last available data)
+
+    // ===== OFF-MARKET GATE =====
+    // Don't fetch from NSE or save snapshots when market is closed.
+    // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
+    // Data already available from:
+    //   1. Zustand persist (optionChain in localStorage from last session)
+    //   2. Disk files (snapshots, signals, trades, delta loaded at expiry change)
+    // This prevents junk snapshots corrupting delta history when app opens off-market.
+    if (!checkIfMarketOpen()) {
+      return;
+    }
+
+    // ===== LIVE MARKET: Full flow (fetch + save + calc + scan + exit check) =====
     set({ isLoading: true, error: null });
     try {
       const params = new URLSearchParams({

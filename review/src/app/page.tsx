@@ -142,11 +142,20 @@ function OptionChainTable() {
   }
 
   if (!optionChain?.chainData?.length) {
+    const { selectedExpiry: expiry, isMarketOpen } = useNSEStore.getState();
     return (
       <Card className="t-bg-card t-border-main">
         <CardContent className="p-8 text-center">
           <BarChart3 className="h-12 w-12 t-text-6 mx-auto mb-4" />
-          <p className="t-text-4">Select an expiry date to view option chain</p>
+          {expiry && !isMarketOpen ? (
+            <>
+              <p className="t-text-4">Market is closed</p>
+              <p className="text-xs t-text-5 mt-1">Option chain data will refresh when market opens (9:15 AM IST)</p>
+              <p className="text-xs t-text-5 mt-0.5">Last session data is preserved in snapshots</p>
+            </>
+          ) : (
+            <p className="t-text-4">Select an expiry date to view option chain</p>
+          )}
         </CardContent>
       </Card>
     );
