@@ -270,7 +270,7 @@ function calculateOISummary(
     sentiment,
     atmStrike: atm,
     dataRange: `±${range}`,
-    lastUpdated: new Date().toLocaleTimeString("en-IN"),
+    lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
   };
 }
 
@@ -792,7 +792,7 @@ async function loadFromDisk(): Promise<boolean> {
       const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, updated.selectedSymbol);
       useNSEStore.setState({
         optionChain: reconstructed,
-        lastUpdated: new Date(latestSnapshot.timestamp).toLocaleTimeString("en-IN"),
+        lastUpdated: new Date(latestSnapshot.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
         spotPrice: latestSnapshot.spotPrice,
         isLoading: false,
       });
@@ -993,7 +993,7 @@ export const useNSEStore = create<NSEStore>()(
             }
           }
 
-          snapshotDeltaTime = new Date().toLocaleTimeString("en-IN");
+          snapshotDeltaTime = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
 
           // Persist delta to disk for: app restart, overnight reference, backtesting
           if (Object.keys(snapshotDelta).length > 0) {
@@ -1102,7 +1102,7 @@ export const useNSEStore = create<NSEStore>()(
         set({
           optionChain: data as unknown as OptionChainState,
           isLoading: false,
-          lastUpdated: new Date().toLocaleTimeString("en-IN"),
+          lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
           spotPrice: spotPrice || 0,
           // Do not keep full snapshot history in memory; rely on disk for persistence.
           snapshots: [],
@@ -1121,7 +1121,7 @@ export const useNSEStore = create<NSEStore>()(
         set({
           optionChain: data as unknown as OptionChainState,
           isLoading: false,
-          lastUpdated: new Date().toLocaleTimeString("en-IN"),
+          lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
         });
       }
     } catch (err: unknown) {
