@@ -657,7 +657,8 @@ interface NSEStore {
   loadSignalsFromFile: () => Promise<void>;
   saveTradeToFile: (trade: Trade) => Promise<void>;
   loadTradesFromFile: () => Promise<void>;
-  loadSnapshotDeltaFromCsv: () => Promise<void>;
+  saveDeltaToFile: (prevTimestamp: string) => Promise<void>;
+  loadDeltaFromFile: () => Promise<void>;
   isMarketOpen: boolean;
   checkMarketHours: () => void;
 
@@ -744,7 +745,7 @@ export const useNSEStore = create<NSEStore>()(
         get().loadSnapshotHistory(),
         get().loadSignalsFromFile(),
         get().loadTradesFromFile(),
-        get().loadSnapshotDeltaFromCsv(),
+        get().loadDeltaFromFile(),
       ]);
       get().fetchOptionChain();
     }
@@ -851,17 +852,9 @@ export const useNSEStore = create<NSEStore>()(
 
           snapshotDeltaTime = new Date().toLocaleTimeString("en-IN");
 
+          // Persist delta to disk for: app restart, overnight reference, backtesting
           if (Object.keys(snapshotDelta).length > 0) {
-            void fetch("/api/nse/delta-csv", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                symbol: selectedSymbol,
-                expiry: selectedExpiry,
-                timestamp: new Date().toISOString(),
-                snapshotDelta,
-              }),
-            });
+            void get().saveDeltaToFile(prevSnapshot.timestamp);
           }
         }
 
@@ -978,7 +971,8 @@ export const useNSEStore = create<NSEStore>()(
         });
 
         if (!prevSnapshot) {
-          void get().loadSnapshotDeltaFromCsv();
+          // No previous snapshot → load last saved delta from disk (e.g. yesterday's closing)
+          void get().loadDeltaFromFile();
         }
       } else {
         set({
@@ -992,12 +986,33 @@ export const useNSEStore = create<NSEStore>()(
     }
   },
 
-  loadSnapshotDeltaFromCsv: async () => {
+  saveDeltaToFile: async (prevTimestamp: string) => {
+    const { selectedSymbol, selectedExpiry, snapshotDelta, spotPrice } = get();
+    if (!selectedSymbol || !selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
+    try {
+      await fetch("/api/nse/delta-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: selectedSymbol,
+          expiry: selectedExpiry,
+          timestamp: new Date().toISOString(),
+          spotPrice,
+          prevTimestamp,
+          snapshotDelta,
+        }),
+      });
+    } catch {
+      // Ignore write failures
+    }
+  },
+
+  loadDeltaFromFile: async () => {
     const { selectedSymbol, selectedExpiry } = get();
     if (!selectedSymbol || !selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/delta-csv?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}`
+        `/api/nse/delta-history?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1008,7 +1023,7 @@ export const useNSEStore = create<NSEStore>()(
         });
       }
     } catch {
-      // Ignore CSV sync failures
+      // Ignore read failures
     }
   },
 

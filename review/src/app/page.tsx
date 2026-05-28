@@ -557,7 +557,7 @@ export default function NSEOptionsTool() {
     loadSnapshotHistory,
     loadSignalsFromFile,
     loadTradesFromFile,
-    loadSnapshotDeltaFromCsv,
+    loadDeltaFromFile,
     tradeMode,
     brokerAccount,
   } = useNSEStore();
@@ -609,9 +609,9 @@ export default function NSEOptionsTool() {
       loadSnapshotHistory(),
       loadSignalsFromFile(),
       loadTradesFromFile(),
-      loadSnapshotDeltaFromCsv(),
+      loadDeltaFromFile(),
     ]);
-  }, [selectedExpiry, loadSnapshotHistory, loadSignalsFromFile, loadTradesFromFile, loadSnapshotDeltaFromCsv]);
+  }, [selectedExpiry, loadSnapshotHistory, loadSignalsFromFile, loadTradesFromFile, loadDeltaFromFile]);
 
   const formatCountdown = (secs: number) => {
     const m = Math.floor(secs / 60);
