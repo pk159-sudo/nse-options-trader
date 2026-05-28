@@ -671,6 +671,139 @@ interface NSEStore {
   updateBrokerBalance: (balance: number) => void;
 }
 
+// Reconstruct optionChain state from a saved snapshot (for off-market / expiry-switch viewing)
+// Snapshot stores only OI + LTP per strike, so other fields (IV, volume, changeOI) will be 0.
+// This is intentional — off-market data is historical, not live.
+function reconstructOptionChainFromSnapshot(
+  snapshot: OISnapshot,
+  symbol: string
+): OptionChainState {
+  const chainData: OptionData[] = snapshot.strikes.map((s) => ({
+    strikePrice: s.strike,
+    CE: {
+      strikePrice: s.strike,
+      openInterest: s.ceOI,
+      lastPrice: s.ceLTP,
+      expiryDate: snapshot.expiry,
+      underlyingValue: snapshot.spotPrice,
+      changeinOpenInterest: 0,
+      totalTradedVolume: 0,
+      impliedVolatility: 0,
+      change: 0,
+      pChange: 0,
+      bidQty: 0,
+      bidprice: 0,
+      askQty: 0,
+      askPrice: 0,
+    },
+    PE: {
+      strikePrice: s.strike,
+      openInterest: s.peOI,
+      lastPrice: s.peLTP,
+      expiryDate: snapshot.expiry,
+      underlyingValue: snapshot.spotPrice,
+      changeinOpenInterest: 0,
+      totalTradedVolume: 0,
+      impliedVolatility: 0,
+      change: 0,
+      pChange: 0,
+      bidQty: 0,
+      bidprice: 0,
+      askQty: 0,
+      askPrice: 0,
+    },
+  }));
+
+  // Basic analysis from snapshot data
+  const totalCEOI = chainData.reduce((sum, item) => sum + (item.CE?.openInterest || 0), 0);
+  const totalPEOI = chainData.reduce((sum, item) => sum + (item.PE?.openInterest || 0), 0);
+  const pcr = totalCEOI > 0 ? totalPEOI / totalCEOI : 0;
+
+  // Max CE/PE OI strikes for support/resistance
+  let maxCEOI = { strike: 0, oi: 0 };
+  let maxPEOI = { strike: 0, oi: 0 };
+  for (const item of chainData) {
+    const ceOI = item.CE?.openInterest || 0;
+    const peOI = item.PE?.openInterest || 0;
+    if (ceOI > maxCEOI.oi) maxCEOI = { strike: item.strikePrice, oi: ceOI };
+    if (peOI > maxPEOI.oi) maxPEOI = { strike: item.strikePrice, oi: peOI };
+  }
+
+  const atmStrike = Math.round(snapshot.spotPrice / 50) * 50;
+  const expiryDate = new Date(snapshot.expiry);
+  const today = new Date(new Date().toISOString().split("T")[0]);
+  const daysToExpiry = Math.max(0, Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+
+  return {
+    spotPrice: snapshot.spotPrice,
+    timestamp: snapshot.timestamp,
+    atmStrike,
+    daysToExpiry,
+    expiryDates: [],
+    selectedExpiry: snapshot.expiry,
+    chainData,
+    analysis: {
+      pcr: Math.round(pcr * 100) / 100,
+      maxPain: 0,
+      totalCEOI,
+      totalPEOI,
+      totalCEVolume: 0,
+      totalPEVolume: 0,
+      maxCEOI,
+      maxPEOI,
+      maxCEChangeOI: { strike: 0, change: 0 },
+      maxPEChangeOI: { strike: 0, change: 0 },
+      resistance: maxCEOI.strike,
+      support: maxPEOI.strike,
+    },
+    oiByStrike: chainData.map((item) => ({
+      strike: item.strikePrice,
+      ceOI: item.CE?.openInterest || 0,
+      peOI: item.PE?.openInterest || 0,
+      ceChangeOI: 0,
+      peChangeOI: 0,
+      ceVolume: 0,
+      peVolume: 0,
+      ceIV: 0,
+      peIV: 0,
+    })),
+  };
+}
+
+// Load last snapshot from disk and reconstruct optionChain (off-market / expiry switch)
+// Returns true if optionChain was reconstructed, false if no snapshot found
+async function loadFromDisk(): Promise<boolean> {
+  try {
+    const state = useNSEStore.getState();
+    if (!state.selectedSymbol || !state.selectedExpiry) return false;
+
+    // Load disk files (snapshots, signals, trades, delta)
+    await Promise.all([
+      state.loadSnapshotHistory(),
+      state.loadSignalsFromFile(),
+      state.loadTradesFromFile(),
+      state.loadDeltaFromFile(),
+    ]);
+
+    // Get fresh state after disk load
+    const updated = useNSEStore.getState();
+    if (updated.snapshots.length > 0) {
+      const latestSnapshot = updated.snapshots[updated.snapshots.length - 1];
+      const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, updated.selectedSymbol);
+      useNSEStore.setState({
+        optionChain: reconstructed,
+        lastUpdated: new Date(latestSnapshot.timestamp).toLocaleTimeString("en-IN"),
+        spotPrice: latestSnapshot.spotPrice,
+        isLoading: false,
+      });
+      return true;
+    }
+  } catch {
+    // Ignore disk read failures
+  }
+  return false;
+}
+
 // Market hours helper: 9:15 AM - 3:30 PM IST, Mon-Fri
 function checkIfMarketOpen(): boolean {
   try {
@@ -741,13 +874,9 @@ export const useNSEStore = create<NSEStore>()(
     // On expiry change, clear only session data (not trades from other expiries if any)
     set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
     if (expiry) {
-      await Promise.all([
-        get().loadSnapshotHistory(),
-        get().loadSignalsFromFile(),
-        get().loadTradesFromFile(),
-        get().loadDeltaFromFile(),
-      ]);
-      get().fetchOptionChain();
+      // Load from disk ONLY — no NSE fetch on expiry switch.
+      // Data will refresh only on manual refresh or countdown during live market.
+      await loadFromDisk();
     }
   },
 
@@ -765,7 +894,9 @@ export const useNSEStore = create<NSEStore>()(
       set({ expiryDates, isExpiryLoading: false });
       if (expiryDates.length > 0 && !get().selectedExpiry) {
         set({ selectedExpiry: expiryDates[0] });
-        get().fetchOptionChain();
+        // Load from disk — don't fetch from NSE on symbol/initial load.
+        // Fetch only triggers on manual refresh or countdown during live market.
+        void loadFromDisk();
       }
     } catch (err: unknown) {
       set({ error: (err as Error).message, isExpiryLoading: false });
@@ -779,11 +910,13 @@ export const useNSEStore = create<NSEStore>()(
     // ===== OFF-MARKET GATE =====
     // Don't fetch from NSE or save snapshots when market is closed.
     // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
-    // Data already available from:
-    //   1. Zustand persist (optionChain in localStorage from last session)
-    //   2. Disk files (snapshots, signals, trades, delta loaded at expiry change)
+    // Off-market: load from disk instead (if user manually clicks refresh).
     // This prevents junk snapshots corrupting delta history when app opens off-market.
     if (!checkIfMarketOpen()) {
+      // If forceRefresh and off-market, reload from disk
+      if (forceRefresh) {
+        await loadFromDisk();
+      }
       return;
     }
 

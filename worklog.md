@@ -23,3 +23,24 @@ Stage Summary:
 - No broken imports remaining
 - Cleaned up orphaned duplicate files in nse/nse/ subfolder
 
+---
+Task ID: 2
+Agent: main
+Task: Off-market disk-only data loading — no NSE fetch on expiry switch
+
+Work Log:
+- Added `reconstructOptionChainFromSnapshot()` helper — converts snapshot (OI+LTP per strike) into full OptionChainState for UI display
+- Added `loadFromDisk()` async function — loads snapshots/signals/trades/delta from disk API, then reconstructs optionChain from latest snapshot
+- Modified `setExpiry()`: replaced `fetchOptionChain()` call with `loadFromDisk()` — expiry switch now loads from disk ONLY
+- Modified `fetchExpiryDates()`: replaced `fetchOptionChain()` call with `void loadFromDisk()` — initial symbol load also uses disk
+- Modified `fetchOptionChain()` off-market gate: if `forceRefresh=true` (manual button), calls `loadFromDisk()` before returning
+- Modified page.tsx refresh button: removed `!isMarketOpen` from disabled condition — button now works off-market too (loads from disk)
+- Updated refresh button tooltip to explain behavior: "Off-market: reloads data from disk (no NSE fetch)"
+
+Stage Summary:
+- NSE API fetch ONLY triggers on: (1) manual refresh during live market, (2) countdown auto-refresh during live market
+- Expiry switch, symbol switch, and off-market refresh all load from disk snapshots only
+- No unnecessary NSE API calls when market is closed or when just switching views
+- Snapshots are NOT saved during off-market (existing gate preserved)
+- Refresh button always works — live market fetches fresh, off-market reloads disk data
+
