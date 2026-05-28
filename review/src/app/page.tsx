@@ -144,8 +144,8 @@ function OptionChainTable() {
   if (!optionChain?.chainData?.length) {
     const { selectedExpiry: expiry, isMarketOpen } = useNSEStore.getState();
     return (
-      <Card className="t-bg-card t-border-main">
-        <CardContent className="p-8 text-center">
+      <Card className="t-bg-card t-border-main" suppressHydrationWarning>
+        <CardContent className="p-8 text-center" suppressHydrationWarning>
           <BarChart3 className="h-12 w-12 t-text-6 mx-auto mb-4" />
           {expiry && !isMarketOpen ? (
             <>
