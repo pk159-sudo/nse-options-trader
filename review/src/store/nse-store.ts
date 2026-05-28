@@ -860,7 +860,7 @@ export const useNSEStore = create<NSEStore>()(
   pendingSignals: [],
   brokerAccount: null,
 
-  isMarketOpen: checkIfMarketOpen(),
+  isMarketOpen: false,
   checkMarketHours: () => {
     set({ isMarketOpen: checkIfMarketOpen() });
   },
