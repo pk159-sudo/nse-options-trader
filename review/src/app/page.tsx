@@ -314,23 +314,23 @@ function OIAnalysisPanel() {
       <div className="grid grid-cols-2 gap-4">
         <Card className="t-bg-card t-border-main">
           <CardContent className="p-4">
-            <p className="text-xs t-text-4 uppercase tracking-wider">Resistance (Max PE OI)</p>
+            <p className="text-xs t-text-4 uppercase tracking-wider">Resistance (Max CE OI)</p>
             <p className="text-2xl font-bold text-red-400 mt-1">
               {optionChain.analysis?.resistance || "-"}
             </p>
             <p className="text-xs t-text-5 mt-1">
-              PE OI: {formatIndianNumber(optionChain.analysis?.maxPEOI?.oi || 0)}
+              CE OI: {formatIndianNumber(optionChain.analysis?.maxCEOI?.oi || 0)}
             </p>
           </CardContent>
         </Card>
         <Card className="t-bg-card t-border-main">
           <CardContent className="p-4">
-            <p className="text-xs t-text-4 uppercase tracking-wider">Support (Max CE OI)</p>
+            <p className="text-xs t-text-4 uppercase tracking-wider">Support (Max PE OI)</p>
             <p className="text-2xl font-bold text-emerald-400 mt-1">
               {optionChain.analysis?.support || "-"}
             </p>
             <p className="text-xs t-text-5 mt-1">
-              CE OI: {formatIndianNumber(optionChain.analysis?.maxCEOI?.oi || 0)}
+              PE OI: {formatIndianNumber(optionChain.analysis?.maxPEOI?.oi || 0)}
             </p>
           </CardContent>
         </Card>
@@ -832,14 +832,14 @@ export default function NSEOptionsTool() {
               value={analysis.support.toString()}
               icon={Shield}
               color="text-emerald-400"
-              subtitle="Max CE OI Strike"
+              subtitle="Max PE OI Strike"
             />
             <MetricCard
               title="Resistance"
               value={analysis.resistance.toString()}
               icon={AlertTriangle}
               color="text-red-400"
-              subtitle="Max PE OI Strike"
+              subtitle="Max CE OI Strike"
             />
           </div>
         )}

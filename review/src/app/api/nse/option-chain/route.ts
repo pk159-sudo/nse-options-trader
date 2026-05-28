@@ -103,15 +103,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const strikesAboveATM = chainData.filter(
-      (item) => item.strikePrice >= spotPrice && item.PE?.openInterest
-    ).sort((a, b) => (b.PE?.openInterest || 0) - (a.PE?.openInterest || 0));
-    const strikesBelowATM = chainData.filter(
-      (item) => item.strikePrice <= spotPrice && item.CE?.openInterest
-    ).sort((a, b) => (b.CE?.openInterest || 0) - (a.CE?.openInterest || 0));
-
-    const resistance = strikesAboveATM[0]?.strikePrice || 0;
-    const support = strikesBelowATM[0]?.strikePrice || 0;
+    // Highest CE OI = Resistance (call writers defend that level)
+    // Highest PE OI = Support (put writers defend that level)
+    const resistance = maxCEOI.strike || 0;
+    const support = maxPEOI.strike || 0;
 
     const responseData = {
       symbol,
