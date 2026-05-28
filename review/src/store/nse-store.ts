@@ -910,13 +910,11 @@ export const useNSEStore = create<NSEStore>()(
     // ===== OFF-MARKET GATE =====
     // Don't fetch from NSE or save snapshots when market is closed.
     // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
-    // Off-market: load from disk instead (if user manually clicks refresh).
+    // Data already available from:
+    //   1. Zustand persist (optionChain in localStorage from last session)
+    //   2. Disk files (snapshots, signals, trades, delta loaded at expiry change)
     // This prevents junk snapshots corrupting delta history when app opens off-market.
     if (!checkIfMarketOpen()) {
-      // If forceRefresh and off-market, reload from disk
-      if (forceRefresh) {
-        await loadFromDisk();
-      }
       return;
     }
 

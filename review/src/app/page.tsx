@@ -749,9 +749,9 @@ export default function NSEOptionsTool() {
                 variant="outline"
                 size="sm"
                 onClick={() => selectedExpiry && fetchOptionChain(true)}
-                disabled={isLoading || !selectedExpiry}
+                disabled={isLoading || !selectedExpiry || !isMarketOpen}
                 className="t-bg-hover t-border-main hover:t-bg-hover text-sm h-9"
-                title={!isMarketOpen ? "Off-market: reloads data from disk (no NSE fetch)" : "Live market: fetches fresh data from NSE"}
+                title={!isMarketOpen ? "Snapshots save & refresh disabled after market closing" : ""}
               >
                 <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isLoading ? "animate-spin" : ""}`} />
                 Refresh
