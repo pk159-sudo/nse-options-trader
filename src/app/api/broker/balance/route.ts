@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  zerodhaBalance,
+  upstoxBalance,
+  angelOneBalance,
+  dhanBalance,
+} from "@/lib/broker-api";
 
-// Broker Balance API - fetches account balance from the connected broker
-// In production, this would call the broker's actual margin/funds API
-// For now, returns mock balance data
+// Broker Balance API — fetches real margin/funds from the connected broker
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const broker = searchParams.get("broker");
     const accessToken = searchParams.get("accessToken");
+    const apiKey = searchParams.get("apiKey");
 
     if (!broker || !accessToken) {
       return NextResponse.json(
@@ -21,58 +26,56 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         broker,
         balance: 0,
+        availableMargin: 0,
+        usedMargin: 0,
+        currency: "INR",
         message: "Groww does not support API trading. Balance not available.",
       });
     }
 
-    /*
-     * PRODUCTION IMPLEMENTATION:
-     *
-     * Zerodha:
-     *   const margins = await kiteConnect.getMargins();
-     *   return margins.equity.net;
-     *
-     * Angel One:
-     *   const balance = await smartConnect.getBalance();
-     *   return balance.data.net;
-     *
-     * Upstox:
-     *   const response = await fetch("https://api.upstox.com/v2/user/get-funds-and-margin", {
-     *     headers: { Authorization: `Bearer ${accessToken}` },
-     *   });
-     *   return response.data.equity.available_margin;
-     *
-     * Dhan:
-     *   const response = await fetch("https://api.dhan.co/v2/funds", {
-     *     headers: { "access_token": accessToken },
-     *   });
-     *   return response.data.availabelBalance;
-     */
+    let result;
 
-    // Mock balance with slight randomization
-    const baseBalances: Record<string, number> = {
-      ZERODHA: 125000,
-      ANGEL_ONE: 98000,
-      UPSTOX: 75000,
-      DHAN: 112000,
-    };
+    switch (broker) {
+      case "ZERODHA": {
+        if (!apiKey) {
+          return NextResponse.json({ error: "Missing apiKey for Zerodha" }, { status: 400 });
+        }
+        result = await zerodhaBalance(apiKey, accessToken);
+        break;
+      }
 
-    const baseBalance = baseBalances[broker] || 100000;
-    const balance = baseBalance + Math.floor((Math.random() - 0.5) * 10000);
+      case "UPSTOX": {
+        result = await upstoxBalance(accessToken);
+        break;
+      }
+
+      case "ANGEL_ONE": {
+        if (!apiKey) {
+          return NextResponse.json({ error: "Missing apiKey for Angel One" }, { status: 400 });
+        }
+        // apiSecret is passed as clientCode for Angel One
+        const clientCode = searchParams.get("apiSecret") || "";
+        result = await angelOneBalance(apiKey, accessToken, clientCode);
+        break;
+      }
+
+      case "DHAN": {
+        result = await dhanBalance(accessToken);
+        break;
+      }
+
+      default:
+        return NextResponse.json({ error: `Unsupported broker: ${broker}` }, { status: 400 });
+    }
 
     return NextResponse.json({
       broker,
-      balance,
-      availableMargin: balance * 0.8, // 80% available for trading
-      usedMargin: balance * 0.2,
-      currency: "INR",
+      ...result,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("Balance fetch error:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch balance" },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : "Failed to fetch balance";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

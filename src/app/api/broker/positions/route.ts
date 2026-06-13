@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  zerodhaPositions,
+  upstoxPositions,
+  angelOnePositions,
+  dhanPositions,
+  type BrokerPosition,
+} from "@/lib/broker-api";
 
-// Broker Positions API - fetches open positions from the connected broker
-// In production, this would call the broker's actual positions API
-// For now, returns mock positions data
+// Broker Positions API — fetches real open positions from the connected broker
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const broker = searchParams.get("broker");
     const accessToken = searchParams.get("accessToken");
+    const apiKey = searchParams.get("apiKey");
 
     if (!broker || !accessToken) {
       return NextResponse.json(
@@ -21,68 +27,63 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         broker,
         positions: [],
+        count: 0,
+        totalPnl: 0,
         message: "Groww does not support API trading. No positions available.",
       });
     }
 
-    /*
-     * PRODUCTION IMPLEMENTATION:
-     *
-     * Zerodha:
-     *   const positions = await kiteConnect.getPositions();
-     *
-     * Angel One:
-     *   const positions = await smartConnect.getPosition();
-     *
-     * Upstox:
-     *   const response = await fetch("https://api.upstox.com/v2/portfolio/short-term-positions", {
-     *     headers: { Authorization: `Bearer ${accessToken}` },
-     *   });
-     *
-     * Dhan:
-     *   const response = await fetch("https://api.dhan.co/v2/positions", {
-     *     headers: { "access_token": accessToken },
-     *   });
-     */
+    let positions: BrokerPosition[] = [];
 
-    // Mock positions
-    const mockPositions = [
-      {
-        tradingSymbol: "NIFTY24500CE",
-        exchange: "NFO",
-        transactionType: "BUY",
-        quantity: 65,
-        averagePrice: 245.5,
-        currentPrice: 278.3,
-        pnl: (278.3 - 245.5) * 65,
-        pnlPercent: ((278.3 - 245.5) / 245.5) * 100,
-        product: "MIS",
-      },
-      {
-        tradingSymbol: "NIFTY24400PE",
-        exchange: "NFO",
-        transactionType: "BUY",
-        quantity: 65,
-        averagePrice: 182.75,
-        currentPrice: 165.4,
-        pnl: (165.4 - 182.75) * 65,
-        pnlPercent: ((165.4 - 182.75) / 182.75) * 100,
-        product: "MIS",
-      },
-    ];
+    switch (broker) {
+      case "ZERODHA": {
+        if (!apiKey) {
+          return NextResponse.json({ error: "Missing apiKey for Zerodha" }, { status: 400 });
+        }
+        positions = await zerodhaPositions(apiKey, accessToken);
+        break;
+      }
+
+      case "UPSTOX": {
+        positions = await upstoxPositions(accessToken);
+        break;
+      }
+
+      case "ANGEL_ONE": {
+        if (!apiKey) {
+          return NextResponse.json({ error: "Missing apiKey for Angel One" }, { status: 400 });
+        }
+        const clientCode = searchParams.get("apiSecret") || "";
+        positions = await angelOnePositions(apiKey, accessToken, clientCode);
+        break;
+      }
+
+      case "DHAN": {
+        positions = await dhanPositions(accessToken);
+        break;
+      }
+
+      default:
+        return NextResponse.json({ error: `Unsupported broker: ${broker}` }, { status: 400 });
+    }
+
+    // Only return NFO (F&O) positions for this app
+    const fnoPositions = positions.filter(
+      (p) => p.exchange === "NFO" || p.tradingSymbol.includes("CE") || p.tradingSymbol.includes("PE")
+    );
+
+    const totalPnl = fnoPositions.reduce((sum, p) => sum + p.pnl, 0);
 
     return NextResponse.json({
       broker,
-      positions: mockPositions,
-      count: mockPositions.length,
-      totalPnl: mockPositions.reduce((sum, p) => sum + p.pnl, 0),
+      positions: fnoPositions,
+      count: fnoPositions.length,
+      totalPnl: Math.round(totalPnl * 100) / 100,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("Positions fetch error:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch positions" },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : "Failed to fetch positions";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

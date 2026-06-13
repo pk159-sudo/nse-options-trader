@@ -156,9 +156,13 @@ export function AccountConnector() {
 
     const fetchBalance = async () => {
       try {
-        const res = await fetch(
-          `/api/broker/balance?broker=${brokerAccount.broker}&accessToken=${brokerAccount.accessToken}`
-        );
+        const params = new URLSearchParams({
+          broker: brokerAccount.broker,
+          accessToken: brokerAccount.accessToken,
+          apiKey: brokerAccount.apiKey,
+          apiSecret: brokerAccount.apiSecret,
+        });
+        const res = await fetch(`/api/broker/balance?${params.toString()}`);
         if (res.ok) {
           const data = await res.json();
           updateBrokerBalance(data.balance);

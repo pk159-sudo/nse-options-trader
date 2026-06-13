@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  zerodhaProfile,
+  zerodhaBalance,
+  upstoxProfile,
+  upstoxBalance,
+  angelOneProfile,
+  angelOneBalance,
+  dhanProfile,
+  dhanBalance,
+} from "@/lib/broker-api";
 
-// Broker Connect API - validates credentials and connects broker account
-// In production, this would initiate OAuth flow with the broker's API
-// For now, validates format and returns mock success response
+// Broker Connect API — validates credentials against real broker APIs
 
 interface ConnectRequest {
   broker: string;
@@ -11,14 +19,7 @@ interface ConnectRequest {
   accessToken: string;
 }
 
-// Mock user IDs for each broker
-const MOCK_USERS: Record<string, { userId: string; balance: number }> = {
-  ZERODHA: { userId: "ZD" + Math.floor(Math.random() * 900000 + 100000), balance: 125000 },
-  ANGEL_ONE: { userId: "AO" + Math.floor(Math.random() * 900000 + 100000), balance: 98000 },
-  UPSTOX: { userId: "UX" + Math.floor(Math.random() * 900000 + 100000), balance: 75000 },
-  DHAN: { userId: "DH" + Math.floor(Math.random() * 900000 + 100000), balance: 112000 },
-  GROWW: { userId: "GW" + Math.floor(Math.random() * 900000 + 100000), balance: 50000 },
-};
+const VALID_BROKERS = ["ZERODHA", "ANGEL_ONE", "UPSTOX", "DHAN", "GROWW"];
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,67 +35,91 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate broker name
-    const validBrokers = ["ZERODHA", "ANGEL_ONE", "UPSTOX", "DHAN", "GROWW"];
-    if (!validBrokers.includes(broker)) {
+    if (!VALID_BROKERS.includes(broker)) {
       return NextResponse.json(
-        { error: `Invalid broker. Supported: ${validBrokers.join(", ")}` },
+        { error: `Invalid broker. Supported: ${VALID_BROKERS.join(", ")}` },
         { status: 400 }
       );
     }
 
-    // Validate API key format (basic check)
-    if (apiKey.length < 8) {
-      return NextResponse.json(
-        { error: "API Key must be at least 8 characters" },
-        { status: 400 }
-      );
-    }
-
-    // Groww doesn't have an API - paper trade only
+    // Groww doesn't have an API — paper trade only
     if (broker === "GROWW") {
       return NextResponse.json({
         success: true,
         broker,
-        userId: MOCK_USERS.GROWW.userId,
-        balance: MOCK_USERS.GROWW.balance,
+        userId: "GROWW_PAPER",
+        balance: 0,
         message: "Groww does not support API trading. Connected in paper-trade mode only.",
         paperTradeOnly: true,
         connectedAt: new Date().toISOString(),
       });
     }
 
-    /*
-     * PRODUCTION IMPLEMENTATION:
-     *
-     * Zerodha (Kite Connect):
-     *   - Use kiteConnect.setAccessToken(accessToken)
-     *   - Call kiteConnect.getProfile() to validate
-     *   - Call kiteConnect.getMargins() for balance
-     *
-     * Angel One (SmartAPI):
-     *   - Create SmartConnect({ api_key, access_token })
-     *   - Call smartConnect.getProfile() to validate
-     *   - Call smartConnect.getBalance() for margin
-     *
-     * Upstox:
-     *   - Use fetch with Authorization: Bearer {accessToken}
-     *   - GET /v2/getProfile to validate
-     *   - GET /v2/getBalance for funds
-     *
-     * Dhan:
-     *   - Use fetch with access_token header
-     *   - GET /user/funds to get balance
-     *   - GET /user/profile to validate
-     */
+    // ── Real broker validation ──
+    let userId = "";
+    let balance = 0;
+    let errorMsg = "";
 
-    // Mock success response
-    const mockUser = MOCK_USERS[broker] || MOCK_USERS.ZERODHA;
+    try {
+      switch (broker) {
+        case "ZERODHA": {
+          // Validate credentials by fetching profile + margins
+          const [profile, margins] = await Promise.all([
+            zerodhaProfile(apiKey, accessToken),
+            zerodhaBalance(apiKey, accessToken),
+          ]);
+          userId = profile.userId;
+          balance = margins.balance;
+          break;
+        }
+
+        case "UPSTOX": {
+          // Upstox only needs accessToken; apiKey is stored but not sent to their API
+          const [profile, funds] = await Promise.all([
+            upstoxProfile(accessToken),
+            upstoxBalance(accessToken),
+          ]);
+          userId = profile.userId;
+          balance = funds.balance;
+          break;
+        }
+
+        case "ANGEL_ONE": {
+          // Angel One needs clientCode = apiSecret (user ID), apiKey = app key
+          const clientCode = apiSecret; // Angel One uses client code as the "secret"
+          const [profile, rms] = await Promise.all([
+            angelOneProfile(apiKey, accessToken, clientCode),
+            angelOneBalance(apiKey, accessToken, clientCode),
+          ]);
+          userId = profile.userId;
+          balance = rms.balance;
+          break;
+        }
+
+        case "DHAN": {
+          const [profile, funds] = await Promise.all([
+            dhanProfile(accessToken),
+            dhanBalance(accessToken),
+          ]);
+          userId = profile.userId;
+          balance = funds.balance;
+          break;
+        }
+      }
+    } catch (err: unknown) {
+      errorMsg = err instanceof Error ? err.message : "Authentication failed";
+      console.error(`Broker connect [${broker}] error:`, errorMsg);
+      return NextResponse.json(
+        { error: `Connection failed: ${errorMsg}` },
+        { status: 401 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
       broker,
-      userId: mockUser.userId,
-      balance: mockUser.balance,
+      userId,
+      balance,
       message: `Successfully connected to ${broker.replace("_", " ")}`,
       paperTradeOnly: false,
       connectedAt: new Date().toISOString(),

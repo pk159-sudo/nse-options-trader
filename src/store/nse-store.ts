@@ -158,6 +158,7 @@ export interface BrokerAccount {
 
 export type TradeMode = "PAPER" | "SEMI_AUTO";
 
+const LOT_SIZES: Record<string, number> = { NIFTY: 65, BANKNIFTY: 15, FINNIFTY: 25, NIFTYIT: 10 };
 const LOT_SIZE = 65;
 const PROFIT_TARGET_PCT = 50;
 const INITIAL_STOP_PCT = 15;
@@ -1289,7 +1290,7 @@ export const useNSEStore = create<NSEStore>()(
 
     const isBrokerConnected = state.brokerAccount?.status === "CONNECTED" && state.brokerAccount.broker !== "GROWW";
 
-    // Update signal status
+    // Update signal status to APPROVED immediately
     const updatedSignals = state.signals.map((s) =>
       s.id === signalId
         ? { ...s, status: "APPROVED" as const, executed: true, isRealTrade: isBrokerConnected }
@@ -1319,18 +1320,61 @@ export const useNSEStore = create<NSEStore>()(
       brokerName: isBrokerConnected ? state.brokerAccount?.broker : undefined,
     };
 
-    // Update the signal with trade reference and set status to EXECUTED
-    const finalSignals = updatedSignals.map((s) =>
-      s.id === signalId ? { ...s, tradeId: trade.id, status: "EXECUTED" as const } : s
-    );
-
     set({
-      signals: finalSignals,
+      signals: updatedSignals,
       pendingSignals: updatedPending,
       trades: [...state.trades, trade],
     });
-    void get().saveSignalToFile(finalSignals.find((s) => s.id === signalId) ?? signal);
+    void get().saveSignalToFile(updatedSignals.find((s) => s.id === signalId) ?? signal);
     void get().saveTradeToFile(trade);
+
+    // If broker is connected, place real order via API
+    if (isBrokerConnected && state.brokerAccount) {
+      const acc = state.brokerAccount;
+      const symbol = state.selectedSymbol || "NIFTY";
+      fetch("/api/broker/place-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          broker: acc.broker,
+          accessToken: acc.accessToken,
+          apiKey: acc.apiKey,
+          apiSecret: acc.apiSecret,
+          symbol,
+          strikePrice: signal.toStrike,
+          optionType: signal.type.includes("CALL") ? "CE" : "PE",
+          transactionType: "BUY",
+          quantity: LOT_SIZES[symbol] || LOT_SIZE,
+          price: signal.entryPrice,
+          orderType: "MARKET",
+          product: "MIS",
+        }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.orderId) {
+            // Update the trade with real broker order ID
+            const { trades: currentTrades } = get();
+            const updatedTrades = currentTrades.map((t) =>
+              t.id === trade.id
+                ? { ...t, brokerOrderId: data.orderId }
+                : t
+            );
+            // Mark signal as EXECUTED with order ID
+            const { signals: currentSignals } = get();
+            const finalSignals = currentSignals.map((s) =>
+              s.id === signalId ? { ...s, tradeId: trade.id, status: "EXECUTED" as const, brokerOrderId: data.orderId } : s
+            );
+            set({ trades: updatedTrades, signals: finalSignals });
+            console.log(`Real order placed: ${data.orderId} — ${data.message}`);
+          } else {
+            console.error(`Order placement failed: ${data.error}`);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to place real order:", err);
+        });
+    }
   },
 
   rejectSignal: (signalId) => {
