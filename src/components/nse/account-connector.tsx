@@ -82,7 +82,7 @@ const BROKER_INFO: Record<
     bgColor: "bg-emerald-500/10",
     borderColor: "border-emerald-500/30",
     hasAPI: true,
-    description: "Dhan API for direct order placement.",
+    description: "Dhan consent-based OAuth. Needs API Key only for OTP login.",
   },
   GROWW: {
     label: "Groww",
@@ -573,13 +573,13 @@ export function AccountConnector() {
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs t-text-4">
-                      {selectedBroker === "ANGEL_ONE" ? "Client Code" : "API Secret"}
+                      {selectedBroker === "ANGEL_ONE" ? "Client Code" : selectedBroker === "DHAN" ? "API Secret (leave empty for OTP)" : "API Secret"}
                     </Label>
                     <Input
                       type={showSecrets ? "text" : "password"}
                       value={apiSecret}
                       onChange={(e) => setApiSecret(e.target.value)}
-                      placeholder={selectedBroker === "ANGEL_ONE" ? "Enter your client code" : "Enter your API secret"}
+                      placeholder={selectedBroker === "ANGEL_ONE" ? "Enter your client code" : selectedBroker === "DHAN" ? "Optional" : "Enter your API secret"}
                       className="t-bg-hover t-border-main text-sm h-9 font-mono"
                     />
                   </div>

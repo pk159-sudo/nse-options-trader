@@ -47,6 +47,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // apiSecret is required for Zerodha and Angel One only
+    if ((broker === "ZERODHA" || broker === "ANGEL_ONE") && !apiSecret) {
+      return NextResponse.json(
+        { error: `${broker === "ZERODHA" ? "Zerodha requires API Secret" : "Angel One requires Client Code"} for token exchange` },
+        { status: 400 }
+      );
+    }
+
     if (!APP_URL) {
       return NextResponse.json(
         { error: "App URL not configured. Set NEXT_PUBLIC_APP_URL in .env.local (e.g. http://localhost:3000 or https://your-app.vercel.app)" },
@@ -63,12 +71,6 @@ export async function POST(request: NextRequest) {
       // Zerodha redirects back with request_token
       // We exchange request_token + api_secret for access_token
       case "ZERODHA": {
-        if (!apiSecret) {
-          return NextResponse.json(
-            { error: "Zerodha requires API Secret for token exchange" },
-            { status: 400 }
-          );
-        }
         const redirectUri = encodeURIComponent(redirectUrl);
         loginURL = `https://kite.zerodha.com/connect/login?v=3&api_key=${apiKey}&redirect_url=${redirectUri}`;
         break;
@@ -87,23 +89,18 @@ export async function POST(request: NextRequest) {
       // User enters client code + OTP → redirected with auth_code
       // auth_code + api_key exchanged for JWT token
       case "ANGEL_ONE": {
-        if (!apiSecret) {
-          return NextResponse.json(
-            { error: "Angel One requires Client Code (enter as API Secret)" },
-            { status: 400 }
-          );
-        }
         const redirectUri = encodeURIComponent(redirectUrl);
         loginURL = `https://apiconnect.angelbroking.com/rest/auth/authorize/v2?api_key=${apiKey}&client_code=${apiSecret}&redirect_uri=${redirectUri}&state=ANGEL_ONE`;
         break;
       }
 
       // ── Dhan ──
-      // OAuth flow: user logs in → redirected with code
-      // code exchanged for access_token
+      // Dhan uses consent-based OAuth (NOT standard OAuth2 code flow)
+      // Step 1: Redirect to Dhan consent page → user logs in + 2FA
+      // Step 2: Dhan redirects back with consentId
+      // Step 3: We exchange consentId for access_token
       case "DHAN": {
-        const redirectUri = encodeURIComponent(redirectUrl);
-        loginURL = `https://api.dhan.co/auth?client_id=${apiKey}&redirect_uri=${redirectUri}&state=DHAN&response_type=code`;
+        loginURL = `https://auth.dhan.co/app/generate-consent?client_id=${apiKey}`;
         break;
       }
 

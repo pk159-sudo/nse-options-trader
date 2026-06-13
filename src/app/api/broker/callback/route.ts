@@ -357,51 +357,55 @@ export async function GET(request: NextRequest) {
     }
 
     // ──────────────────────────────────────────────────────
-    //  DHAN v2
-    //  Params: code (authorization code from Dhan redirect)
+    //  DHAN v2 — Consent-based OAuth (NOT standard OAuth2)
+    //  Dhan redirects with consentId after user login + 2FA
+    //  We need to consume the consent to get access_token
     // ──────────────────────────────────────────────────────
-    if (brokerFromState === "DHAN") {
+    if (brokerFromState === "DHAN" || searchParams.get("consentId")) {
       clearAuthCookie(response);
 
-      const code = searchParams.get("code");
-      if (!code || !apiKey) {
+      const consentId = searchParams.get("consentId");
+      if (!consentId || !apiKey) {
         return redirectWithError(
           response,
-          "Missing authorization code or API key for Dhan"
+          "Missing consentId or API key from Dhan. Make sure redirect URL is set correctly in Dhan developer portal."
         );
       }
 
-      // Exchange authorization code → access_token
-      const res = await fetch("https://api.dhan.co/v2/auth/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: apiKey,
-          client_secret: apiSecret || "",
-          authorization_code: code,
-          grant_type: "authorization_code",
-        }),
+      // Consume consent → get access_token
+      const consentUrl = `https://auth.dhan.co/app/consumeApp-consent?tokenId=${consentId}`;
+      const res = await fetch(consentUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const errText = await res.text().catch(() => "");
         return redirectWithError(
           response,
-          (err as { error_message?: string }).error_message ||
-            `Dhan token exchange failed (${res.status})`
+          `Dhan consent exchange failed (${res.status}). ${errText.substring(0, 200)}`
         );
       }
 
-      const data = (await res.json()) as {
-        access_token?: string;
-      };
-      const accessToken = data.access_token || "";
+      let accessToken = "";
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(await res.text()) as Record<string, unknown>;
+        // Dhan returns access_token in the response
+        accessToken = String(data.access_token || data.accessToken || "");
+      } catch {
+        return redirectWithError(
+          response,
+          "Invalid response from Dhan during consent exchange. Please try again."
+        );
+      }
+
       const userId = apiKey;
 
       if (!accessToken) {
         return redirectWithError(
           response,
-          "No access_token received from Dhan"
+          "No access_token received from Dhan after consent exchange."
         );
       }
 
@@ -412,9 +416,7 @@ export async function GET(request: NextRequest) {
           headers: { "access-token": accessToken },
         });
         if (fundRes.ok) {
-          const fundData = (await fundRes.json()) as {
-            equity_amount?: { available_balance?: number };
-          };
+          const fundData = await safeJson<{ equity_amount?: { available_balance?: number } }>(fundRes);
           balance = Number(fundData.equity_amount?.available_balance) || 0;
         }
       } catch {
