@@ -36,20 +36,19 @@ yarn-error.log*
 Thumbs.db
 
 # Data (generated at runtime — never commit)
-review/data/snapshots/
-review/data/delta-history/
-review/data/signals/
-review/data/trades/
+data/snapshots/
+data/delta-history/
+data/signals/
+data/trades/
 
 # Prisma
-review/prisma/*.db
+prisma/*.db
 
 # Turbo
 .turbo/
 
 # Vercel
 .vercel
-
 # Non-project folders
 skills/
 upload/
