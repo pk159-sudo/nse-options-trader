@@ -101,6 +101,21 @@ function SmartTradeCard({
   const stopPct = isOpen ? (Math.abs(currentPrice - trade.currentStop) / trade.entryPrice) * 100 : 0;
   const progressPct = Math.min(100, Math.max(0, (liveProfitPct / 50) * 100));
 
+  // Ladder system: 3-step trailing SL
+  // Step 1: Init SL = -15% below entry
+  // Step 2: When profit >= 15% → SL moves to Breakeven
+  // Step 3: When profit >= 30% → SL moves to +15% profit lock
+  // Target: 50% → Exit
+  const ladderSteps = [
+    { label: "Init SL", trigger: -15, slLabel: "-15%", active: liveProfitPct < 15, reached: true },
+    { label: "BE", trigger: 15, slLabel: "Break Even", active: liveProfitPct >= 15 && liveProfitPct < 30, reached: liveProfitPct >= 15 },
+    { label: "+15%", trigger: 30, slLabel: "+15% Lock", active: liveProfitPct >= 30 && liveProfitPct < 50, reached: liveProfitPct >= 30 },
+    { label: "Exit", trigger: 50, slLabel: "50% Target", active: liveProfitPct >= 50, reached: liveProfitPct >= 50 },
+  ];
+  const currentLadderIndex = ladderSteps.findIndex((s) => s.active);
+  const maxDrawdown = trade.maxDrawdownPct;
+  const peak = trade.highestProfitPct;
+
   return (
     <div className={`border rounded-xl overflow-hidden ${isOpen ? pnlBg : "t-bg-subtle t-border-sub/50 border"}`}>
       <div className={`h-0.5 ${isOpen ? (isProfit ? "bg-emerald-500" : "bg-red-500") : (trade.pnl > 0 ? "bg-emerald-500/50" : "bg-red-500/50")}`} />
@@ -149,42 +164,71 @@ function SmartTradeCard({
 
         {isOpen && (
           <>
+            {/* Ladder Target Progress */}
             <div className="space-y-1">
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="t-text-5 flex items-center gap-1">
-                  <Target className="h-2.5 w-2.5" />
-                  Target 50%
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="t-text-4 font-semibold flex items-center gap-1">
+                  <Target className="h-3 w-3 text-amber-400" />
+                  Ladder Target 50%
                 </span>
-                <span className={`font-bold ${progressPct >= 100 ? "text-emerald-400" : "t-text-4"}`}>
+                <span className={`font-bold ${progressPct >= 100 ? "text-emerald-400" : progressPct >= 50 ? "text-amber-400" : "t-text-4"}`}>
                   {progressPct.toFixed(0)}%
                 </span>
               </div>
               <Progress
                 value={progressPct}
-                className={`h-1.5 ${progressPct >= 100 ? "[&>div]:bg-emerald-500" : progressPct >= 50 ? "[&>div]:bg-amber-500" : "[&>div]:t-text-6"}`}
+                className={`h-2 ${progressPct >= 100 ? "[&>div]:bg-emerald-500" : progressPct >= 50 ? "[&>div]:bg-amber-500" : progressPct >= 25 ? "[&>div]:bg-yellow-600" : "[&>div]:t-text-6"}`}
               />
             </div>
 
-            <div className="flex items-center justify-between text-[10px] pt-0.5">
+            {/* Ladder Steps */}
+            <div className="flex items-center gap-1">
+              {ladderSteps.map((step, i) => {
+                const isReached = step.reached;
+                const isCurrent = step.active;
+                const stepColor = isCurrent
+                  ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
+                  : isReached
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                    : "t-bg-hover t-border-sub/30 border t-text-6";
+                return (
+                  <div key={step.label} className="flex items-center gap-1 flex-1">
+                    <div className={`flex-1 text-center py-1 px-1 rounded border text-[10px] font-bold ${stepColor}`}>
+                      {step.label}
+                    </div>
+                    {i < ladderSteps.length - 1 && (
+                      <span className={`text-[10px] ${isReached ? "text-emerald-400" : "t-text-7"}`}>
+                        →
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* SL + Peak + Drawdown + Time */}
+            <div className="flex items-center justify-between text-[11px] pt-0.5">
               <div className="flex items-center gap-3">
-                <span className="t-text-5 flex items-center gap-1">
-                  <Shield className="h-2.5 w-2.5" />
-                  SL: <span className="font-mono text-red-400">₹{trade.currentStop.toFixed(2)}</span>
-                  <span className="t-text-6">({stopPct.toFixed(1)}%)</span>
+                <span className="t-text-4 font-medium flex items-center gap-1">
+                  <Shield className="h-3 w-3 text-red-400" />
+                  SL: <span className="font-mono text-red-400 font-bold">₹{trade.currentStop.toFixed(2)}</span>
                 </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {trade.highestProfitPct > 0 && (
-                  <span className="text-amber-400/70 flex items-center gap-0.5">
-                    <Flame className="h-2.5 w-2.5" />
-                    Peak: {trade.highestProfitPct.toFixed(1)}%
+                {peak > 0 && (
+                  <span className="text-amber-400 font-bold flex items-center gap-0.5">
+                    <Flame className="h-3 w-3" />
+                    Peak: {peak.toFixed(1)}%
                   </span>
                 )}
-                <span className="t-text-6 flex items-center gap-0.5">
-                  <Timer className="h-2.5 w-2.5" />
-                  {timeSince(trade.time)}
-                </span>
+                {maxDrawdown > 0 && (
+                  <span className="text-red-400/70 flex items-center gap-0.5">
+                    DD: {maxDrawdown.toFixed(1)}%
+                  </span>
+                )}
               </div>
+              <span className="t-text-5 flex items-center gap-0.5">
+                <Timer className="h-3 w-3" />
+                {timeSince(trade.time)}
+              </span>
             </div>
           </>
         )}
