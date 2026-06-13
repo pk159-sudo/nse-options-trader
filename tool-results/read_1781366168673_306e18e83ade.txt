@@ -1,0 +1,834 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useMemo } from "react";
+     4→     4→import { useNSEStore, Trade, OptionData } from "@/store/nse-store";
+     5→     5→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+     6→     6→import { Input } from "@/components/ui/input";
+     7→     7→import { Progress } from "@/components/ui/progress";
+     8→     8→import {
+     9→     9→  Zap,
+    10→    10→  TrendingUp,
+    11→    11→  TrendingDown,
+    12→    12→  Trophy,
+    13→    13→  Clock,
+    14→    14→  AlertTriangle,
+    15→    15→  Shield,
+    16→    16→  Flame,
+    17→    17→  Target,
+    18→    18→  ArrowUpRight,
+    19→    19→  ArrowDownRight,
+    20→    20→  Timer,
+    21→    21→  BarChart3,
+    22→    22→  Crosshair,
+    23→    23→  Activity,
+    24→    24→  Wallet,
+    25→    25→  XCircle,
+    26→    26→  Square,
+    27→    27→  Calendar,
+    28→    28→} from "lucide-react";
+    29→    29→
+    30→    30→const LOT_SIZE = 65;
+    31→    31→
+    32→    32→function formatRs(n: number): string {
+    33→    33→  if (Math.abs(n) >= 1e5) return `${(n / 1e5).toFixed(1)}L`;
+    34→    34→  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+    35→    35→  return n.toFixed(0);
+    36→    36→}
+    37→    37→
+    38→    38→function timeSince(timeStr: string): string {
+    39→    39→  try {
+    40→    40→    const tradeTime = new Date(`1970-01-01T${timeStr}`);
+    41→    41→    if (isNaN(tradeTime.getTime())) return "";
+    42→    42→    const now = new Date();
+    43→    43→    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    44→    44→    const tradeMinutes = tradeTime.getHours() * 60 + tradeTime.getMinutes();
+    45→    45→    const diff = currentMinutes - tradeMinutes;
+    46→    46→    if (diff < 0) return "";
+    47→    47→    if (diff < 60) return `${diff}m ago`;
+    48→    48→    const h = Math.floor(diff / 60);
+    49→    49→    const m = diff % 60;
+    50→    50→    return `${h}h ${m}m ago`;
+    51→    51→  } catch {
+    52→    52→    return "";
+    53→    53→  }
+    54→    54→}
+    55→    55→
+    56→    56→function formatCreatedAt(isoStr: string): string {
+    57→    57→  try {
+    58→    58→    const d = new Date(isoStr);
+    59→    59→    if (isNaN(d.getTime())) return "";
+    60→    60→    return d.toLocaleDateString("en-IN", {
+    61→    61→      day: "2-digit",
+    62→    62→      month: "short",
+    63→    63→      year: "numeric",
+    64→    64→    });
+    65→    65→  } catch {
+    66→    66→    return "";
+    67→    67→  }
+    68→    68→}
+    69→    69→
+    70→    70→function SmartTradeCard({
+    71→    71→  trade,
+    72→    72→  currentLTP,
+    73→    73→  onClose,
+    74→    74→}: {
+    75→    75→  trade: Trade;
+    76→    76→  currentLTP: number;
+    77→    77→  onClose?: () => void;
+    78→    78→}) {
+    79→    79→  const isBullish = trade.signalType === "BULLISH";
+    80→    80→  const isOpen = trade.status === "OPEN";
+    81→    81→  const optionLabel = isBullish ? "CE" : "PE";
+    82→    82→  const tradeAction = isBullish ? "CALL BUY" : "PUT BUY";
+    83→    83→
+    84→    84→  let liveProfitPct = 0;
+    85→    85→  let livePnl = 0;
+    86→    86→  let currentPrice = trade.exitPrice || 0;
+    87→    87→
+    88→    88→  if (isOpen && currentLTP > 0) {
+    89→    89→    currentPrice = currentLTP;
+    90→    90→    liveProfitPct = ((currentLTP - trade.entryPrice) / trade.entryPrice) * 100;
+    91→    91→    livePnl = (currentLTP - trade.entryPrice) * LOT_SIZE;
+    92→    92→  } else if (!isOpen) {
+    93→    93→    liveProfitPct = ((trade.exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+    94→    94→    livePnl = trade.pnl;
+    95→    95→  }
+    96→    96→
+    97→    97→  const isProfit = livePnl > 0;
+    98→    98→  const pnlColor = livePnl > 0 ? "text-emerald-400" : livePnl < 0 ? "text-red-400" : "t-text-4";
+    99→    99→  const pnlBg = livePnl > 0 ? "bg-emerald-500/10 border-emerald-500/20" : livePnl < 0 ? "bg-red-500/10 border-red-500/20" : "t-bg-hover t-border-sub border";
+   100→   100→
+   101→   101→  const stopPct = isOpen ? (Math.abs(currentPrice - trade.currentStop) / trade.entryPrice) * 100 : 0;
+   102→   102→  const progressPct = Math.min(100, Math.max(0, (liveProfitPct / 50) * 100));
+   103→   103→
+   104→   104→  // Ladder system: 3-step trailing SL
+   105→   105→  // Step 1: Init SL = -15% below entry
+   106→   106→  // Step 2: When profit >= 15% → SL moves to Breakeven
+   107→   107→  // Step 3: When profit >= 30% → SL moves to +15% profit lock
+   108→   108→  // Target: 50% → Exit
+   109→   109→  const ladderSteps = [
+   110→   110→    { label: "Init SL", trigger: -15, slLabel: "-15%", active: liveProfitPct < 15, reached: true },
+   111→   111→    { label: "BE", trigger: 15, slLabel: "Break Even", active: liveProfitPct >= 15 && liveProfitPct < 30, reached: liveProfitPct >= 15 },
+   112→   112→    { label: "+15%", trigger: 30, slLabel: "+15% Lock", active: liveProfitPct >= 30 && liveProfitPct < 50, reached: liveProfitPct >= 30 },
+   113→   113→    { label: "Exit", trigger: 50, slLabel: "50% Target", active: liveProfitPct >= 50, reached: liveProfitPct >= 50 },
+   114→   114→  ];
+   115→   115→  const currentLadderIndex = ladderSteps.findIndex((s) => s.active);
+   116→   116→  const maxDrawdown = trade.maxDrawdownPct;
+   117→   117→  const peak = trade.highestProfitPct;
+   118→   118→
+   119→   119→  return (
+   120→   120→    <div className={`border rounded-xl overflow-hidden ${isOpen ? pnlBg : "t-bg-subtle t-border-sub/50 border"}`}>
+   121→   121→      <div className={`h-0.5 ${isOpen ? (isProfit ? "bg-emerald-500" : "bg-red-500") : (trade.pnl > 0 ? "bg-emerald-500/50" : "bg-red-500/50")}`} />
+   122→   122→      <div className="p-3 space-y-2">
+   123→   123→        <div className="flex items-center justify-between">
+   124→   124→          <div className="flex items-center gap-2">
+   125→   125→            <div className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold ${isBullish ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+   126→   126→              {isBullish ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+   127→   127→              {isBullish ? "BULL" : "BEAR"}
+   128→   128→            </div>
+   129→   129→            <span className="text-sm font-bold t-text-2 font-mono">{trade.strike}</span>
+   130→   130→            <span className={`text-[11px] font-mono font-bold px-1.5 py-0.5 rounded ${isBullish ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>{optionLabel}</span>
+   131→   131→            <span className={`text-[11px] t-text-5 font-semibold px-1.5 py-0.5 rounded ${isBullish ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>{tradeAction}</span>
+   132→   132→            <span className="text-[11px] t-text-4 font-semibold uppercase tracking-[0.08em]">EXP {trade.expiry}</span>
+   133→   133→          </div>
+   134→   134→          <div className="text-right">
+   135→   135→            <span className={`text-base font-bold font-mono ${pnlColor}`}>
+   136→   136→              {livePnl > 0 ? "+" : ""}{formatRs(livePnl)}₹
+   137→   137→            </span>
+   138→   138→            <span className={`ml-1.5 text-[11px] font-bold ${pnlColor}`}>
+   139→   139→              ({liveProfitPct > 0 ? "+" : ""}{liveProfitPct.toFixed(1)}%)
+   140→   140→            </span>
+   141→   141→          </div>
+   142→   142→        </div>
+   143→   143→
+   144→   144→        <div className="flex items-center gap-3 text-[11px]">
+   145→   145→          <div className="flex items-center gap-1">
+   146→   146→            <span className="t-text-5">Entry:</span>
+   147→   147→            <span className="font-mono t-text-3">₹{trade.entryPrice.toFixed(2)}</span>
+   148→   148→          </div>
+   149→   149→          {isOpen && currentLTP > 0 && (
+   150→   150→            <div className="flex items-center gap-1">
+   151→   151→              <Activity className="h-3 w-3 text-amber-400" />
+   152→   152→              <span className="t-text-5">LTP:</span>
+   153→   153→              <span className={`font-mono ${isProfit ? "text-emerald-400" : "text-red-400"}`}>₹{currentLTP.toFixed(2)}</span>
+   154→   154→            </div>
+   155→   155→          )}
+   156→   156→          {!isOpen && (
+   157→   157→            <div className="flex items-center gap-1">
+   158→   158→              <Target className="h-3 w-3 t-text-5" />
+   159→   159→              <span className="t-text-5">Exit:</span>
+   160→   160→              <span className="font-mono t-text-3">₹{trade.exitPrice.toFixed(2)}</span>
+   161→   161→            </div>
+   162→   162→          )}
+   163→   163→        </div>
+   164→   164→
+   165→   165→        {isOpen && (
+   166→   166→          <>
+   167→   167→            {/* Ladder Target Progress */}
+   168→   168→            <div className="space-y-1">
+   169→   169→              <div className="flex items-center justify-between text-[11px]">
+   170→   170→                <span className="t-text-4 font-semibold flex items-center gap-1">
+   171→   171→                  <Target className="h-3 w-3 text-amber-400" />
+   172→   172→                  Ladder Target 50%
+   173→   173→                </span>
+   174→   174→                <span className={`font-bold ${progressPct >= 100 ? "text-emerald-400" : progressPct >= 50 ? "text-amber-400" : "t-text-4"}`}>
+   175→   175→                  {progressPct.toFixed(0)}%
+   176→   176→                </span>
+   177→   177→              </div>
+   178→   178→              <Progress
+   179→   179→                value={progressPct}
+   180→   180→                className={`h-2 ${progressPct >= 100 ? "[&>div]:bg-emerald-500" : progressPct >= 50 ? "[&>div]:bg-amber-500" : progressPct >= 25 ? "[&>div]:bg-yellow-600" : "[&>div]:t-text-6"}`}
+   181→   181→              />
+   182→   182→            </div>
+   183→   183→
+   184→   184→            {/* Ladder Steps */}
+   185→   185→            <div className="flex items-center gap-1">
+   186→   186→              {ladderSteps.map((step, i) => {
+   187→   187→                const isReached = step.reached;
+   188→   188→                const isCurrent = step.active;
+   189→   189→                const stepColor = isCurrent
+   190→   190→                  ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
+   191→   191→                  : isReached
+   192→   192→                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+   193→   193→                    : "t-bg-hover t-border-sub/30 border t-text-6";
+   194→   194→                return (
+   195→   195→                  <div key={step.label} className="flex items-center gap-1 flex-1">
+   196→   196→                    <div className={`flex-1 text-center py-1 px-1 rounded border text-[10px] font-bold ${stepColor}`}>
+   197→   197→                      {step.label}
+   198→   198→                    </div>
+   199→   199→                    {i < ladderSteps.length - 1 && (
+   200→   200→                      <span className={`text-[10px] ${isReached ? "text-emerald-400" : "t-text-7"}`}>
+   201→   201→                        →
+   202→   202→                      </span>
+   203→   203→                    )}
+   204→   204→                  </div>
+   205→   205→                );
+   206→   206→              })}
+   207→   207→            </div>
+   208→   208→
+   209→   209→            {/* SL + Peak + Drawdown + Time */}
+   210→   210→            <div className="flex items-center justify-between text-[11px] pt-0.5">
+   211→   211→              <div className="flex items-center gap-3">
+   212→   212→                <span className="t-text-4 font-medium flex items-center gap-1">
+   213→   213→                  <Shield className="h-3 w-3 text-red-400" />
+   214→   214→                  SL: <span className="font-mono text-red-400 font-bold">₹{trade.currentStop.toFixed(2)}</span>
+   215→   215→                </span>
+   216→   216→                {peak > 0 && (
+   217→   217→                  <span className="text-amber-400 font-bold flex items-center gap-0.5">
+   218→   218→                    <Flame className="h-3 w-3" />
+   219→   219→                    Peak: {peak.toFixed(1)}%
+   220→   220→                  </span>
+   221→   221→                )}
+   222→   222→                {maxDrawdown > 0 && (
+   223→   223→                  <span className="text-red-400/70 flex items-center gap-0.5">
+   224→   224→                    DD: {maxDrawdown.toFixed(1)}%
+   225→   225→                  </span>
+   226→   226→                )}
+   227→   227→              </div>
+   228→   228→              <span className="t-text-5 flex items-center gap-0.5">
+   229→   229→                <Timer className="h-3 w-3" />
+   230→   230→                {timeSince(trade.time)}
+   231→   231→              </span>
+   232→   232→            </div>
+   233→   233→          </>
+   234→   234→        )}
+   235→   235→
+   236→   236→        {isOpen && onClose && (
+   237→   237→          <button
+   238→   238→            onClick={onClose}
+   239→   239→            className="w-full mt-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/30 transition-colors text-[11px] font-bold cursor-pointer"
+   240→   240→          >
+   241→   241→            <XCircle className="h-3.5 w-3.5" />
+   242→   242→            Manually Close
+   243→   243→          </button>
+   244→   244→        )}
+   245→   245→
+   246→   246→        {!isOpen && (
+   247→   247→          <div className="flex items-center justify-between text-[11px]">
+   248→   248→            <div className="flex items-center gap-2">
+   249→   249→              <span className={`px-2 py-0.5 rounded-full font-bold ${trade.pnl > 0 ? "bg-emerald-500/15 text-emerald-400" : trade.pnl < 0 ? "bg-red-500/15 text-red-400" : "t-text-7 t-text-4"}`}>
+   250→   250→                {trade.pnl > 0 ? "WIN" : trade.pnl < 0 ? "LOSS" : "BE"}
+   251→   251→              </span>
+   252→   252→              {trade.createdAt && (
+   253→   253→                <span className="t-text-4 font-medium flex items-center gap-0.5">
+   254→   254→                  <Calendar className="h-3 w-3" />
+   255→   255→                  {formatCreatedAt(trade.createdAt)}
+   256→   256→                </span>
+   257→   257→              )}
+   258→   258→            </div>
+   259→   259→            <div className="flex items-center gap-3">
+   260→   260→              <span className="t-text-4 font-medium flex items-center gap-0.5">
+   261→   261→                <ArrowUpRight className="h-3 w-3 text-emerald-400" />
+   262→   262→                {trade.time}
+   263→   263→              </span>
+   264→   264→              {trade.exitPrice > 0 && trade.priceHistory.length > 1 && (
+   265→   265→                <span className="t-text-4 font-medium flex items-center gap-0.5">
+   266→   266→                  <ArrowDownRight className="h-3 w-3 text-red-400" />
+   267→   267→                  {trade.priceHistory[trade.priceHistory.length - 1]?.time || ""}
+   268→   268→                </span>
+   269→   269→              )}
+   270→   270→            </div>
+   271→   271→          </div>
+   272→   272→        )}
+   273→   273→      </div>
+   274→   274→    </div>
+   275→   275→  );
+   276→   276→}
+   277→   277→
+   278→   278→function SignalCard({ signal, linkedTrade }: {
+   279→   279→  signal: ReturnType<typeof useNSEStore.getState>["signals"][0];
+   280→   280→  linkedTrade: ReturnType<typeof useNSEStore.getState>["trades"][0] | undefined;
+   281→   281→}) {
+   282→   282→  const isBullish = signal.type === "BULLISH";
+   283→   283→  const optionType = isBullish ? "CALL BUY" : "PUT BUY";
+   284→   284→  const optionLabel = isBullish ? "CE" : "PE";
+   285→   285→  const color = isBullish ? "text-emerald-400" : "text-red-400";
+   286→   286→  const borderColor = isBullish ? "border-l-emerald-500" : "border-l-red-500";
+   287→   287→  const bgColor = isBullish ? "bg-emerald-500/5" : "bg-red-500/5";
+   288→   288→  const strengthColor =
+   289→   289→    signal.strength >= 80
+   290→   290→      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+   291→   291→      : signal.strength >= 60
+   292→   292→      ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+   293→   293→      : "t-text-4 t-bg-hover t-border-sub border";
+   294→   294→
+   295→   295→  let tradeOutcome: { pnl: number; profitPct: number; status: string } | null = null;
+   296→   296→  if (linkedTrade) {
+   297→   297→    const entry = linkedTrade.entryPrice;
+   298→   298→    if (linkedTrade.status === "CLOSED") {
+   299→   299→      const profitPct = ((linkedTrade.exitPrice - entry) / entry) * 100;
+   300→   300→      tradeOutcome = { pnl: linkedTrade.pnl, profitPct, status: "CLOSED" };
+   301→   301→    } else {
+   302→   302→      const lastPrice = linkedTrade.priceHistory.length > 0
+   303→   303→        ? linkedTrade.priceHistory[linkedTrade.priceHistory.length - 1].price
+   304→   304→        : entry;
+   305→   305→      const profitPct = ((lastPrice - entry) / entry) * 100;
+   306→   306→      const unrealizedPnl = (lastPrice - entry) * LOT_SIZE;
+   307→   307→      tradeOutcome = { pnl: unrealizedPnl, profitPct, status: "OPEN" };
+   308→   308→    }
+   309→   309→  }
+   310→   310→
+   311→   311→  return (
+   312→   312→    <div className={`border-l-2 ${borderColor} ${bgColor} t-border-main border rounded-lg p-3 space-y-2`}>
+   313→   313→      <div className="flex items-center justify-between">
+   314→   314→        <div className="flex items-center gap-2">
+   315→   315→          <span className={`text-sm font-bold ${color}`}>
+   316→   316→            {isBullish ? "BULLISH" : "BEARISH"}
+   317→   317→          </span>
+   318→   318→          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isBullish ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+   319→   319→            {optionType}
+   320→   320→          </span>
+   321→   321→          <span className="text-[11px] t-text-4 font-medium flex items-center gap-1">
+   322→   322→            <Clock className="h-3 w-3" />
+   323→   323→            {signal.time}
+   324→   324→          </span>
+   325→   325→          {signal.createdAt && (
+   326→   326→            <span className="text-[11px] t-text-4 font-medium flex items-center gap-0.5">
+   327→   327→              <Calendar className="h-3 w-3" />
+   328→   328→              {formatCreatedAt(signal.createdAt)}
+   329→   329→            </span>
+   330→   330→          )}
+   331→   331→        </div>
+   332→   332→        <div className="flex items-center gap-1.5">
+   333→   333→          <div className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${strengthColor}`}>
+   334→   334→            {signal.strength}%
+   335→   335→          </div>
+   336→   336→          {signal.executed && linkedTrade && (
+   337→   337→            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+   338→   338→              linkedTrade.status === "OPEN"
+   339→   339→                ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 animate-pulse"
+   340→   340→                : linkedTrade.pnl > 0
+   341→   341→                  ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+   342→   342→                  : "bg-red-500/15 text-red-400 border border-red-500/30"
+   343→   343→            }`}>
+   344→   344→              {linkedTrade.status === "OPEN" ? "LIVE" : linkedTrade.pnl > 0 ? "WIN" : "LOSS"}
+   345→   345→            </span>
+   346→   346→          )}
+   347→   347→          {signal.skipReason && (
+   348→   348→            <span className="text-[9px] t-text-6 t-bg-hover px-2 py-0.5 rounded-full t-border-sub border" title={signal.skipReason}>
+   349→   349→              SKIP
+   350→   350→            </span>
+   351→   351→          )}
+   352→   352→        </div>
+   353→   353→      </div>
+   354→   354→      <div className="flex items-center gap-2">
+   355→   355→        <div className="text-lg font-bold t-text-2 font-mono">
+   356→   356→          {signal.fromStrike} - {signal.toStrike}
+   357→   357→        </div>
+   358→   358→        <span className={`text-[11px] font-bold ${isBullish ? "text-emerald-400" : "text-red-400"}`}>
+   359→   359→          {optionLabel} @{signal.toStrike}
+   360→   360→        </span>
+   361→   361→      </div>
+   362→   362→      <div className="flex items-center justify-between text-xs">
+   363→   363→        <span className="t-text-4 font-mono">
+   364→   364→          Entry: ₹{signal.entryPrice.toFixed(2)}
+   365→   365→        </span>
+   366→   366→        <span className="text-[10px] t-text-5 max-w-[180px] truncate">{signal.reason}</span>
+   367→   367→      </div>
+   368→   368→      {signal.oiChange && (
+   369→   369→        <div className="text-[10px] t-text-5 flex items-center gap-1">
+   370→   370→          <BarChart3 className="h-3 w-3" />
+   371→   371→          OI Change: {formatRs(signal.oiChange)}
+   372→   372→        </div>
+   373→   373→      )}
+   374→   374→      {tradeOutcome && linkedTrade && (
+   375→   375→        <div className={`mt-1 pt-2 t-border-main border-t ${
+   376→   376→          tradeOutcome.pnl > 0 ? "bg-emerald-500/5" : tradeOutcome.pnl < 0 ? "bg-red-500/5" : ""
+   377→   377→        } rounded px-2 py-1.5`}>
+   378→   378→          <div className="flex items-center justify-between">
+   379→   379→            <div className="flex items-center gap-3 text-[11px]">
+   380→   380→              <span className="t-text-5">
+   381→   381→                {tradeOutcome.status === "OPEN" ? "Current" : "Exit"}: ₹{(
+   382→   382→                  tradeOutcome.status === "OPEN"
+   383→   383→                    ? linkedTrade.priceHistory[linkedTrade.priceHistory.length - 1]?.price || signal.entryPrice
+   384→   384→                    : linkedTrade.exitPrice
+   385→   385→                  ).toFixed(2)}
+   386→   386→              </span>
+   387→   387→              {linkedTrade.highestProfitPct > 0 && (
+   388→   388→                <span className="text-amber-400/70 flex items-center gap-0.5">
+   389→   389→                  <Flame className="h-2.5 w-2.5" />
+   390→   390→                  Peak: {linkedTrade.highestProfitPct.toFixed(1)}%
+   391→   391→                </span>
+   392→   392→              )}
+   393→   393→            </div>
+   394→   394→            <div className="flex items-center gap-1.5">
+   395→   395→              <span className={`text-sm font-bold font-mono ${
+   396→   396→                tradeOutcome.pnl > 0 ? "text-emerald-400" : tradeOutcome.pnl < 0 ? "text-red-400" : "t-text-4"
+   397→   397→              }`}>
+   398→   398→                {tradeOutcome.pnl > 0 ? "+" : ""}{formatRs(tradeOutcome.pnl)}₹
+   399→   399→              </span>
+   400→   400→              <span className={`text-[10px] font-bold ${
+   401→   401→                tradeOutcome.pnl > 0 ? "text-emerald-400" : tradeOutcome.pnl < 0 ? "text-red-400" : "t-text-4"
+   402→   402→              }`}>
+   403→   403→                ({tradeOutcome.profitPct > 0 ? "+" : ""}{tradeOutcome.profitPct.toFixed(1)}%)
+   404→   404→              </span>
+   405→   405→            </div>
+   406→   406→          </div>
+   407→   407→          {tradeOutcome.status === "OPEN" && (
+   408→   408→            <div className="mt-1.5">
+   409→   409→              <Progress
+   410→   410→                value={Math.min(100, Math.max(0, (tradeOutcome.profitPct / 50) * 100))}
+   411→   411→                className={`h-1 ${tradeOutcome.profitPct >= 50 ? "[&>div]:bg-emerald-500" : tradeOutcome.profitPct >= 25 ? "[&>div]:bg-amber-500" : "[&>div]:t-text-6"}`}
+   412→   412→              />
+   413→   413→              <div className="flex items-center justify-between text-[9px] mt-0.5">
+   414→   414→                <span className="t-text-6">SL: ₹{linkedTrade.currentStop.toFixed(2)}</span>
+   415→   415→                <span className="t-text-6">Target: 50%</span>
+   416→   416→              </div>
+   417→   417→            </div>
+   418→   418→          )}
+   419→   419→          {tradeOutcome.status === "CLOSED" && (
+   420→   420→            <div className="flex items-center gap-2 mt-1 text-[9px] t-text-5">
+   421→   421→              <span>Entry: ₹{linkedTrade.entryPrice.toFixed(2)}</span>
+   422→   422→              <span>-</span>
+   423→   423→              <span>Exit: ₹{linkedTrade.exitPrice.toFixed(2)}</span>
+   424→   424→              <span className={linkedTrade.maxDrawdownPct > 0 ? "text-red-400/70" : "t-text-6"}>
+   425→   425→                DD: {linkedTrade.maxDrawdownPct.toFixed(1)}%
+   426→   426→              </span>
+   427→   427→            </div>
+   428→   428→          )}
+   429→   429→        </div>
+   430→   430→      )}
+   431→   431→    </div>
+   432→   432→  );
+   433→   433→}
+   434→   434→
+   435→   435→function PerformanceStats({ trades, unrealizedPnl }: { trades: Trade[]; unrealizedPnl: number }) {
+   436→   436→  const closedTrades = trades.filter((t) => t.status === "CLOSED");
+   437→   437→  const openTrades = trades.filter((t) => t.status === "OPEN");
+   438→   438→
+   439→   439→  const wins = closedTrades.filter((t) => t.pnl > 0);
+   440→   440→  const losses = closedTrades.filter((t) => t.pnl <= 0);
+   441→   441→  const totalPnl = closedTrades.reduce((s, t) => s + t.pnl, 0);
+   442→   442→  const totalWinPnl = wins.reduce((s, t) => s + t.pnl, 0);
+   443→   443→  const totalLossPnl = losses.reduce((s, t) => s + t.pnl, 0);
+   444→   444→  const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length) * 100 : 0;
+   445→   445→
+   446→   446→  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+   447→   447→  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
+   448→   448→  const profitFactor = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? Infinity : 0;
+   449→   449→
+   450→   450→  const bestTrade = closedTrades.length > 0
+   451→   451→    ? closedTrades.reduce((best, t) => t.pnl > best.pnl ? t : best, closedTrades[0])
+   452→   452→    : null;
+   453→   453→  const worstTrade = closedTrades.length > 0
+   454→   454→    ? closedTrades.reduce((worst, t) => t.pnl < worst.pnl ? t : worst, closedTrades[0])
+   455→   455→    : null;
+   456→   456→
+   457→   457→  let currentStreakCount = 0;
+   458→   458→  let currentStreakType: "WIN" | "LOSS" | "" = "";
+   459→   459→  for (let i = closedTrades.length - 1; i >= 0; i--) {
+   460→   460→    const t = closedTrades[i];
+   461→   461→    if (t.pnl > 0 && (currentStreakType === "WIN" || currentStreakType === "")) {
+   462→   462→      currentStreakCount++;
+   463→   463→      currentStreakType = "WIN";
+   464→   464→    } else if (t.pnl <= 0 && (currentStreakType === "LOSS" || currentStreakType === "")) {
+   465→   465→      currentStreakCount++;
+   466→   466→      currentStreakType = "LOSS";
+   467→   467→    } else {
+   468→   468→      break;
+   469→   469→    }
+   470→   470→  }
+   471→   471→
+   472→   472→  let longestWinStreak = 0;
+   473→   473→  let longestLossStreak = 0;
+   474→   474→  let runningStreak = 0;
+   475→   475→  let runningType: "WIN" | "LOSS" | "" = "";
+   476→   476→
+   477→   477→  for (const t of closedTrades) {
+   478→   478→    const outcome = t.pnl > 0 ? "WIN" : "LOSS";
+   479→   479→    if (outcome === runningType) {
+   480→   480→      runningStreak++;
+   481→   481→    } else {
+   482→   482→      if (runningType === "WIN") longestWinStreak = Math.max(longestWinStreak, runningStreak);
+   483→   483→      if (runningType === "LOSS") longestLossStreak = Math.max(longestLossStreak, runningStreak);
+   484→   484→      runningType = outcome;
+   485→   485→      runningStreak = 1;
+   486→   486→    }
+   487→   487→  }
+   488→   488→
+   489→   489→  if (runningType === "WIN") longestWinStreak = Math.max(longestWinStreak, runningStreak);
+   490→   490→  if (runningType === "LOSS") longestLossStreak = Math.max(longestLossStreak, runningStreak);
+   491→   491→
+   492→   492→  const combinedPnl = totalPnl + unrealizedPnl;
+   493→   493→
+   494→   494→  return (
+   495→   495→    <div className="space-y-3">
+   496→   496→      <div className="grid grid-cols-5 gap-2">
+   497→   497→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   498→   498→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Realized</p>
+   499→   499→          <p className={`text-lg font-bold mt-0.5 font-mono ${totalPnl > 0 ? "text-emerald-400" : totalPnl < 0 ? "text-red-400" : "t-text-4"}`}>
+   500→   500→            {totalPnl > 0 ? "+" : ""}{formatRs(totalPnl)}
+   501→   501→          </p>
+   502→   502→          <p className="text-[9px] t-text-6">₹ closed</p>
+   503→   503→        </div>
+   504→   504→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   505→   505→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Unrealized</p>
+   506→   506→          <p className={`text-lg font-bold mt-0.5 font-mono ${unrealizedPnl > 0 ? "text-emerald-400" : unrealizedPnl < 0 ? "text-red-400" : "t-text-4"}`}>
+   507→   507→            {unrealizedPnl > 0 ? "+" : ""}{formatRs(unrealizedPnl)}
+   508→   508→          </p>
+   509→   509→          <p className="text-[9px] t-text-6">₹ open</p>
+   510→   510→        </div>
+   511→   511→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   512→   512→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Total P&L</p>
+   513→   513→          <p className={`text-lg font-bold mt-0.5 font-mono ${combinedPnl > 0 ? "text-emerald-400" : combinedPnl < 0 ? "text-red-400" : "t-text-4"}`}>
+   514→   514→            {combinedPnl > 0 ? "+" : ""}{formatRs(combinedPnl)}
+   515→   515→          </p>
+   516→   516→          <p className="text-[9px] t-text-6">₹ combined</p>
+   517→   517→        </div>
+   518→   518→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   519→   519→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Max Profit</p>
+   520→   520→          <p className="text-lg font-bold mt-0.5 font-mono text-emerald-400">
+   521→   521→            {bestTrade ? `+${formatRs(bestTrade.pnl)}` : "-"}
+   522→   522→          </p>
+   523→   523→          <p className="text-[9px] t-text-6">best closed</p>
+   524→   524→        </div>
+   525→   525→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   526→   526→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Max Loss</p>
+   527→   527→          <p className="text-lg font-bold mt-0.5 font-mono text-red-400">
+   528→   528→            {worstTrade ? `${formatRs(worstTrade.pnl)}` : "-"}
+   529→   529→          </p>
+   530→   530→          <p className="text-[9px] t-text-6">worst closed</p>
+   531→   531→        </div>
+   532→   532→      </div>
+   533→   533→      <div className="grid grid-cols-5 gap-2">
+   534→   534→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   535→   535→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Win Rate</p>
+   536→   536→          <p className={`text-lg font-bold mt-0.5 font-mono ${winRate >= 50 ? "text-emerald-400" : winRate > 0 ? "text-red-400" : "t-text-5"}`}>
+   537→   537→            {winRate.toFixed(0)}%
+   538→   538→          </p>
+   539→   539→          <p className="text-[9px] t-text-6">{wins.length}W / {losses.length}L</p>
+   540→   540→        </div>
+   541→   541→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   542→   542→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Current Streak</p>
+   543→   543→          <p className={`text-lg font-bold mt-0.5 font-mono ${currentStreakType === "WIN" ? "text-emerald-400" : currentStreakType === "LOSS" ? "text-red-400" : "t-text-5"}`}>
+   544→   544→            {currentStreakCount > 0 ? `${currentStreakCount}${currentStreakType === "WIN" ? "W" : "L"}` : "-"}
+   545→   545→          </p>
+   546→   546→          <p className="text-[9px] t-text-6">latest closed</p>
+   547→   547→        </div>
+   548→   548→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   549→   549→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Longest Win Streak</p>
+   550→   550→          <p className="text-lg font-bold mt-0.5 font-mono text-emerald-400">
+   551→   551→            {longestWinStreak || "-"}
+   552→   552→          </p>
+   553→   553→          <p className="text-[9px] t-text-6">historical</p>
+   554→   554→        </div>
+   555→   555→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   556→   556→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Longest Loss Streak</p>
+   557→   557→          <p className="text-lg font-bold mt-0.5 font-mono text-red-400">
+   558→   558→            {longestLossStreak || "-"}
+   559→   559→          </p>
+   560→   560→          <p className="text-[9px] t-text-6">historical</p>
+   561→   561→        </div>
+   562→   562→        <div className="t-bg-muted rounded-xl p-3 text-center">
+   563→   563→          <p className="text-[9px] t-text-5 uppercase tracking-wider">Open</p>
+   564→   564→          <p className="text-lg font-bold mt-0.5 text-amber-400 font-mono">
+   565→   565→            {openTrades.length}
+   566→   566→          </p>
+   567→   567→          <p className="text-[9px] t-text-6">active</p>
+   568→   568→        </div>
+   569→   569→      </div>
+   570→   570→
+   571→   571→      {closedTrades.length > 0 && (
+   572→   572→        <div className="grid grid-cols-4 gap-2">
+   573→   573→          <div className="t-bg-subtle rounded-lg p-2.5 text-center t-border-sub/30 border">
+   574→   574→            <div className="flex items-center justify-center gap-1">
+   575→   575→              <Trophy className="h-3 w-3 text-amber-400" />
+   576→   576→              <span className="text-[9px] t-text-5">Profit Factor</span>
+   577→   577→            </div>
+   578→   578→            <p className={`text-sm font-bold font-mono mt-0.5 ${profitFactor >= 1.5 ? "text-emerald-400" : profitFactor > 0 ? "text-amber-400" : "t-text-5"}`}>
+   579→   579→              {profitFactor === Infinity ? "INF" : profitFactor > 0 ? profitFactor.toFixed(2) : "-"}
+   580→   580→            </p>
+   581→   581→          </div>
+   582→   582→          <div className="t-bg-subtle rounded-lg p-2.5 text-center t-border-sub/30 border">
+   583→   583→            <div className="flex items-center justify-center gap-1">
+   584→   584→              <TrendingUp className="h-3 w-3 text-emerald-400" />
+   585→   585→              <span className="text-[9px] t-text-5">Avg Win</span>
+   586→   586→            </div>
+   587→   587→            <p className="text-sm font-bold text-emerald-400 font-mono mt-0.5">
+   588→   588→              +{formatRs(avgWin)}
+   589→   589→            </p>
+   590→   590→          </div>
+   591→   591→          <div className="t-bg-subtle rounded-lg p-2.5 text-center t-border-sub/30 border">
+   592→   592→            <div className="flex items-center justify-center gap-1">
+   593→   593→              <TrendingDown className="h-3 w-3 text-red-400" />
+   594→   594→              <span className="text-[9px] t-text-5">Avg Loss</span>
+   595→   595→            </div>
+   596→   596→            <p className="text-sm font-bold text-red-400 font-mono mt-0.5">
+   597→   597→              -{formatRs(avgLoss)}
+   598→   598→            </p>
+   599→   599→          </div>
+   600→   600→          <div className="t-bg-subtle rounded-lg p-2.5 text-center t-border-sub/30 border">
+   601→   601→            <div className="flex items-center justify-center gap-1">
+   602→   602→              <Flame className="h-3 w-3 text-amber-400" />
+   603→   603→              <span className="text-[9px] t-text-5">Streak</span>
+   604→   604→            </div>
+   605→   605→            <p className={`text-sm font-bold font-mono mt-0.5 ${currentStreakType === "WIN" ? "text-emerald-400" : currentStreakType === "LOSS" ? "text-red-400" : "t-text-5"}`}>
+   606→   606→              {currentStreakCount > 0 ? `${currentStreakCount}${currentStreakType === "WIN" ? "W" : "L"}` : "-"}
+   607→   607→            </p>
+   608→   608→          </div>
+   609→   609→        </div>
+   610→   610→      )}
+   611→   611→
+   612→   612→      {bestTrade && (
+   613→   613→        <div className="flex gap-2">
+   614→   614→          <div className="flex-1 bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-2">
+   615→   615→            <div className="flex items-center gap-1 text-[9px] text-emerald-400/70 mb-1">
+   616→   616→              <Trophy className="h-2.5 w-2.5" /> Best Trade
+   617→   617→            </div>
+   618→   618→            <p className="text-xs font-bold text-emerald-400 font-mono">
+   619→   619→              {bestTrade.strike} {bestTrade.signalType === "BULLISH" ? "CALL" : "PUT"} → +{formatRs(bestTrade.pnl)}₹
+   620→   620→            </p>
+   621→   621→          </div>
+   622→   622→          {worstTrade && worstTrade.pnl < bestTrade.pnl && (
+   623→   623→            <div className="flex-1 bg-red-500/5 border border-red-500/10 rounded-lg p-2">
+   624→   624→              <div className="flex items-center gap-1 text-[9px] text-red-400/70 mb-1">
+   625→   625→                <AlertTriangle className="h-2.5 w-2.5" /> Worst Trade
+   626→   626→              </div>
+   627→   627→              <p className="text-xs font-bold text-red-400 font-mono">
+   628→   628→                {worstTrade.strike} {worstTrade.signalType === "BULLISH" ? "CALL" : "PUT"} → {formatRs(worstTrade.pnl)}₹
+   629→   629→              </p>
+   630→   630→            </div>
+   631→   631→          )}
+   632→   632→        </div>
+   633→   633→      )}
+   634→   634→    </div>
+   635→   635→  );
+   636→   636→}
+   637→   637→
+   638→   638→export function SignalsPanel() {
+   639→   639→  const { signals, trades, oiThreshold, setOIThreshold, snapshots, optionChain, closeTrade, closeAllTrades } = useNSEStore();
+   640→   640→
+   641→   641→  const openTrades = trades.filter((t) => t.status === "OPEN");
+   642→   642→  const closedTrades = trades.filter((t) => t.status === "CLOSED");
+   643→   643→
+   644→   644→  const tradeBySignalId = useMemo(() => {
+   645→   645→    const map = new Map<string, Trade>();
+   646→   646→    for (const t of trades) {
+   647→   647→      if (t.signalId) map.set(t.signalId, t);
+   648→   648→    }
+   649→   649→    return map;
+   650→   650→  }, [trades]);
+   651→   651→
+   652→   652→  const ltpMap = useMemo(() => {
+   653→   653→    const map = new Map<number, { ceLTP: number; peLTP: number }>();
+   654→   654→    const chainData = optionChain?.chainData;
+   655→   655→    if (chainData && Array.isArray(chainData)) {
+   656→   656→      for (const rawItem of chainData) {
+   657→   657→        const item = rawItem as unknown as OptionData;
+   658→   658→        const strike = item.strikePrice;
+   659→   659→        if (typeof strike === "number") {
+   660→   660→          map.set(strike, {
+   661→   661→            ceLTP: item.CE?.lastPrice || 0,
+   662→   662→            peLTP: item.PE?.lastPrice || 0,
+   663→   663→          });
+   664→   664→        }
+   665→   665→      }
+   666→   666→    }
+   667→   667→    return map;
+   668→   668→  }, [optionChain]);
+   669→   669→
+   670→   670→  const unrealizedPnl = useMemo(() => {
+   671→   671→    let total = 0;
+   672→   672→    for (const trade of openTrades) {
+   673→   673→      const ltp = ltpMap.get(trade.strike);
+   674→   674→      if (!ltp) continue;
+   675→   675→      const currentPrice = trade.signalType === "BULLISH" ? ltp.ceLTP : ltp.peLTP;
+   676→   676→      if (currentPrice > 0 && trade.entryPrice > 0) {
+   677→   677→        total += (currentPrice - trade.entryPrice) * LOT_SIZE;
+   678→   678→      }
+   679→   679→    }
+   680→   680→    return total;
+   681→   681→       }, [openTrades, ltpMap]);
+   682→   682→
+   683→   683→     return (
+   684→   684→    <div className="space-y-4">
+   685→   685→      <PerformanceStats trades={trades} unrealizedPnl={unrealizedPnl} />
+   686→   686→
+   687→   687→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   688→   688→        <div className="space-y-3">
+   689→   689→          <Card className="t-bg-card t-border-main">
+   690→   690→            <CardHeader className="pb-2">
+   691→   691→              <div className="flex items-center justify-between">
+   692→   692→                <CardTitle className="text-sm t-text-2 flex items-center gap-2">
+   693→   693→                  <Crosshair className="h-4 w-4 text-amber-400" />
+   694→   694→                  Live Signals
+   695→   695→                </CardTitle>
+   696→   696→                <span className="text-[10px] t-bg-hover t-text-4 px-2 py-0.5 rounded-full t-border-sub border">
+   697→   697→                  {snapshots.length} snaps
+   698→   698→                </span>
+   699→   699→              </div>
+   700→   700→            </CardHeader>
+   701→   701→            <CardContent className="space-y-3">
+   702→   702→              <div className="flex items-center gap-2 t-bg-subtle rounded-lg p-2 t-border-sub/30 border">
+   703→   703→                <Zap className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" />
+   704→   704→                <label className="text-[11px] t-text-5 flex-shrink-0">OI Unwind Threshold:</label>
+   705→   705→                <Input
+   706→   706→                  type="number"
+   707→   707→                  value={oiThreshold}
+   708→   708→                  onChange={(e) => setOIThreshold(Number(e.target.value) || 50000)}
+   709→   709→                  className="w-28 h-7 text-xs t-bg-hover t-border-main ml-auto"
+   710→   710→                  min={1000}
+   711→   711→                  step={5000}
+   712→   712→                />
+   713→   713→              </div>
+   714→   714→
+   715→   715→              <div className="grid grid-cols-5 gap-1.5">
+   716→   716→                {[
+   717→   717→                  { label: "Engine", value: "BUY Only", color: "text-emerald-400" },
+   718→   718→                  { label: "Bullish", value: "CALL +200", color: "text-emerald-400" },
+   719→   719→                  { label: "Bearish", value: "PUT -200", color: "text-red-400" },
+   720→   720→                  { label: "Target", value: "50%", color: "text-emerald-400" },
+   721→   721→                  { label: "Stop", value: "15% / BE@15% / +15%@30%", color: "text-amber-400" },
+   722→   722→                ].map((s) => (
+   723→   723→                  <div key={s.label} className="t-bg-subtle rounded-lg p-1.5 text-center">
+   724→   724→                    <p className="text-[9px] t-text-6">{s.label}</p>
+   725→   725→                    <p className={`text-[11px] font-bold ${s.color}`}>{s.value}</p>
+   726→   726→                  </div>
+   727→   727→                ))}
+   728→   728→              </div>
+   729→   729→
+   730→   730→              {signals.length === 0 ? (
+   731→   731→                <div className="text-center py-8">
+   732→   732→                  <Zap className="h-10 w-10 t-text-6 mx-auto mb-2" />
+   733→   733→                  <p className="text-xs t-text-6">Waiting for OI unwinding signals</p>
+   734→   734→                  <p className="text-[10px] t-text-7 mt-1">Need 2+ snapshots with auto-refresh ON</p>
+   735→   735→                </div>
+   736→   736→              ) : (
+   737→   737→                <div className="space-y-2 max-h-[500px] overflow-y-auto custom-scrollbar">
+   738→   738→                  {[...signals].reverse().slice(0, 15).map((sig, i) => {
+   739→   739→                    const linkedTrade = sig.tradeId ? tradeBySignalId.get(sig.tradeId) : undefined;
+   740→   740→                    return (
+   741→   741→                      <SignalCard key={`${sig.id}-${i}`} signal={sig} linkedTrade={linkedTrade} />
+   742→   742→                    );
+   743→   743→                  })}
+   744→   744→                </div>
+   745→   745→              )}
+   746→   746→            </CardContent>
+   747→   747→          </Card>
+   748→   748→        </div>
+   749→   749→
+   750→   750→        <div className="space-y-3">
+   751→   751→          <Card className="t-bg-card t-border-main">
+   752→   752→            <CardHeader className="pb-2">
+   753→   753→              <div className="flex items-center justify-between">
+   754→   754→                <CardTitle className="text-sm t-text-2 flex items-center gap-2">
+   755→   755→                  <Wallet className="h-4 w-4 text-amber-400" />
+   756→   756→                  Trade Book
+   757→   757→                </CardTitle>
+   758→   758→                <div className="flex items-center gap-2">
+   759→   759→                  {openTrades.length > 0 && (
+   760→   760→                    <span className="text-[10px] bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded-full border border-amber-500/20 font-bold animate-pulse">
+   761→   761→                      {openTrades.length} LIVE
+   762→   762→                    </span>
+   763→   763→                  )}
+   764→   764→                </div>
+   765→   765→              </div>
+   766→   766→            </CardHeader>
+   767→   767→            <CardContent className="space-y-3">
+   768→   768→              {openTrades.length > 0 && (
+   769→   769→                <div className="space-y-2">
+   770→   770→                  <div className="flex items-center justify-between">
+   771→   771→                    <h4 className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
+   772→   772→                      <AlertTriangle className="h-3 w-3" />
+   773→   773→                      Open Positions ({openTrades.length})
+   774→   774→                    </h4>
+   775→   775→                    {openTrades.length > 1 && (
+   776→   776→                      <button
+   777→   777→                        onClick={closeAllTrades}
+   778→   778→                        className="flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-[10px] font-bold cursor-pointer"
+   779→   779→                      >
+   780→   780→                        <Square className="h-3 w-3" />
+   781→   781→                        Close All
+   782→   782→                      </button>
+   783→   783→                    )}
+   784→   784→                  </div>
+   785→   785→                  <div className="space-y-2">
+   786→   786→                    {openTrades.map((trade) => {
+   787→   787→                      const ltp = ltpMap.get(trade.strike);
+   788→   788→                      const currentLTP = trade.signalType === "BULLISH"
+   789→   789→                        ? (ltp?.ceLTP || 0)
+   790→   790→                        : (ltp?.peLTP || 0);
+   791→   791→                      return (
+   792→   792→                        <SmartTradeCard
+   793→   793→                          key={`open-${trade.id}`}
+   794→   794→                          trade={trade}
+   795→   795→                          currentLTP={currentLTP}
+   796→   796→                          onClose={() => closeTrade(trade.id)}
+   797→   797→                        />
+   798→   798→                      );
+   799→   799→                    })}
+   800→   800→                  </div>
+   801→   801→                </div>
+   802→   802→              )}
+   803→   803→
+   804→   804→              <div className="space-y-2">
+   805→   805→                <h4 className="text-[11px] font-bold t-text-5 flex items-center gap-1.5 uppercase tracking-wider">
+   806→   806→                  <Shield className="h-3 w-3" />
+   807→   807→                  Closed Trades ({closedTrades.length})
+   808→   808→                </h4>
+   809→   809→                {closedTrades.length === 0 ? (
+   810→   810→                  <div className="text-center py-6">
+   811→   811→                    <Shield className="h-8 w-8 t-text-6 mx-auto mb-2" />
+   812→   812→                    <p className="text-xs t-text-6 italic">No closed trades yet</p>
+   813→   813→                    <p className="text-[10px] t-text-7 mt-1">Trades close at 50% target or 15% stop loss</p>
+   814→   814→                  </div>
+   815→   815→                ) : (
+   816→   816→                  <div className="space-y-1.5 max-h-[400px] overflow-y-auto custom-scrollbar">
+   817→   817→                    {[...closedTrades].reverse().slice(0, 20).map((trade, i) => (
+   818→   818→                      <SmartTradeCard
+   819→   819→                        key={`closed-${trade.strike}-${trade.time}-${i}`}
+   820→   820→                        trade={trade}
+   821→   821→                        currentLTP={0}
+   822→   822→                      />
+   823→   823→                    ))}
+   824→   824→                  </div>
+   825→   825→                )}
+   826→   826→              </div>
+   827→   827→            </CardContent>
+   828→   828→          </Card>
+   829→   829→        </div>
+   830→   830→      </div>
+   831→   831→    </div>
+   832→   832→  );
+   833→   833→}
+   834→   834→

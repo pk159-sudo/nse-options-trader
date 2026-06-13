@@ -101,20 +101,20 @@ function SmartTradeCard({
   const stopPct = isOpen ? (Math.abs(currentPrice - trade.currentStop) / trade.entryPrice) * 100 : 0;
   const progressPct = Math.min(100, Math.max(0, (liveProfitPct / 50) * 100));
 
-  // Ladder system: 3-step trailing SL
-  // Step 1: Init SL = -15% below entry
-  // Step 2: When profit >= 15% → SL moves to Breakeven
-  // Step 3: When profit >= 30% → SL moves to +15% profit lock
+  // Ladder system: 3-step trailing SL (based on highestProfitPct — same logic as store)
+  // Step 1: Init SL = -15% below entry (default, always active at start)
+  // Step 2: When peak profit >= 15% → SL moves to Breakeven
+  // Step 3: When peak profit >= 30% → SL moves to +15% profit lock
   // Target: 50% → Exit
-  const ladderSteps = [
-    { label: "Init SL", trigger: -15, slLabel: "-15%", active: liveProfitPct < 15, reached: true },
-    { label: "BE", trigger: 15, slLabel: "Break Even", active: liveProfitPct >= 15 && liveProfitPct < 30, reached: liveProfitPct >= 15 },
-    { label: "+15%", trigger: 30, slLabel: "+15% Lock", active: liveProfitPct >= 30 && liveProfitPct < 50, reached: liveProfitPct >= 30 },
-    { label: "Exit", trigger: 50, slLabel: "50% Target", active: liveProfitPct >= 50, reached: liveProfitPct >= 50 },
-  ];
-  const currentLadderIndex = ladderSteps.findIndex((s) => s.active);
-  const maxDrawdown = trade.maxDrawdownPct;
   const peak = trade.highestProfitPct;
+  const maxDrawdown = trade.maxDrawdownPct;
+  const ladderSteps = [
+    { label: "SL -15%", sub: "Initial", trigger: 0, slLabel: "-15% SL", reached: true, current: peak < 15 },
+    { label: "BE", sub: "Breakeven", trigger: 15, slLabel: "Entry = SL", reached: peak >= 15, current: peak >= 15 && peak < 30 },
+    { label: "Lock +15%", sub: "Profit Lock", trigger: 30, slLabel: "+15% SL", reached: peak >= 30, current: peak >= 30 && peak < 50 },
+    { label: "Target", sub: "50% Exit", trigger: 50, slLabel: "Full Exit", reached: peak >= 50, current: peak >= 50 },
+  ];
+  const currentLadderIndex = ladderSteps.findIndex((s) => s.current);
 
   return (
     <div className={`border rounded-xl overflow-hidden ${isOpen ? pnlBg : "t-bg-subtle t-border-sub/50 border"}`}>
@@ -184,22 +184,30 @@ function SmartTradeCard({
             {/* Ladder Steps */}
             <div className="flex items-center gap-1">
               {ladderSteps.map((step, i) => {
-                const isReached = step.reached;
-                const isCurrent = step.active;
-                const stepColor = isCurrent
-                  ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
-                  : isReached
-                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                    : "t-bg-hover t-border-sub/30 border t-text-6";
+                const isReached = step.reached && !step.current;
+                const isCurrent = step.current;
+                const isPending = !step.reached && !step.current;
                 return (
                   <div key={step.label} className="flex items-center gap-1 flex-1">
-                    <div className={`flex-1 text-center py-1 px-1 rounded border text-[10px] font-bold ${stepColor}`}>
-                      {step.label}
+                    <div className={`flex-1 text-center py-1.5 px-1 rounded-md border text-[10px] font-bold transition-all ${
+                      isCurrent
+                        ? "bg-amber-500/20 border-amber-500/50 text-amber-300 ring-1 ring-amber-500/30"
+                        : isReached
+                          ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
+                          : "t-bg-hover t-border-sub/20 border t-text-7"
+                    }`}>
+                      <div className="flex items-center justify-center gap-0.5">
+                        {isReached && <span className="text-emerald-400">✓</span>}
+                        {isCurrent && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />}
+                        {isPending && <span className="t-text-7">○</span>}
+                        <span>{step.label}</span>
+                      </div>
+                      <div className={`text-[8px] mt-0.5 font-medium ${isCurrent ? "text-amber-400/70" : isReached ? "text-emerald-400/60" : "t-text-7"}`}>
+                        {step.sub}
+                      </div>
                     </div>
                     {i < ladderSteps.length - 1 && (
-                      <span className={`text-[10px] ${isReached ? "text-emerald-400" : "t-text-7"}`}>
-                        →
-                      </span>
+                      <div className={`w-3 h-0.5 rounded-full ${step.reached ? "bg-emerald-500/50" : "bg-gray-700/30"}`} />
                     )}
                   </div>
                 );

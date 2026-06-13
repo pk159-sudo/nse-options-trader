@@ -971,10 +971,16 @@ function getDemoTrades(expiry: string): Trade[] {
       exitPrice: 0,
       pnl: 0,
       status: "OPEN",
-      currentStop: openEntry * 0.85, // SL at 120.96
-      highestProfitPct: 0,
-      maxDrawdownPct: 0,
-      priceHistory: [{ time: "14:02:00", price: openEntry }],
+      currentStop: openEntry * 1.15, // SL moved to +15% lock (peak was >30%)
+      highestProfitPct: 42.1,
+      maxDrawdownPct: 8.3,
+      priceHistory: [
+        { time: "14:02:00", price: openEntry },
+        { time: "14:15:00", price: 155 },
+        { time: "14:30:00", price: 170 },
+        { time: "14:45:00", price: 188 },
+        { time: "15:00:00", price: 202.20 },
+      ],
       expiry,
       signalId: "sig-demo-bull-3",
       isRealTrade: false,
