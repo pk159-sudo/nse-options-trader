@@ -6,6 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 // SECURITY: api_key + api_secret are stored in an encrypted cookie (not URL params)
 // so they never leak in browser history, server logs, or referrer headers.
 
+// IMPORTANT: Set NEXT_PUBLIC_APP_URL in .env.local to your deployed URL
+// e.g. NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
+// For localhost testing: NEXT_PUBLIC_APP_URL=http://localhost:3000
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "";
 
 function encrypt(data: string): string {
@@ -44,9 +47,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const redirectUrl = APP_URL
-      ? `${APP_URL}/api/broker/callback`
-      : "/api/broker/callback";
+    if (!APP_URL) {
+      return NextResponse.json(
+        { error: "App URL not configured. Set NEXT_PUBLIC_APP_URL in .env.local (e.g. http://localhost:3000 or https://your-app.vercel.app)" },
+        { status: 400 }
+      );
+    }
+    const redirectUrl = `${APP_URL}/api/broker/callback`;
 
     let loginURL = "";
 
