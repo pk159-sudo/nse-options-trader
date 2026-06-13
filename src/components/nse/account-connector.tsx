@@ -292,11 +292,19 @@ export function AccountConnector() {
         }),
       });
 
-      const data = await res.json();
+      let data: Record<string, unknown>;
+      try {
+        data = await res.json();
+      } catch {
+        setError("Server error — please try again. If this persists, restart the app.");
+        addActivity("CONNECT", "Server returned invalid response", "FAILED");
+        return;
+      }
 
       if (!res.ok) {
-        setError(data.error || "Failed to connect");
-        addActivity("CONNECT", `Failed: ${data.error}`, "FAILED");
+        const errMsg = typeof data.error === "string" ? data.error : "Failed to connect";
+        setError(errMsg);
+        addActivity("CONNECT", `Failed: ${errMsg}`, "FAILED");
         return;
       }
 
@@ -306,15 +314,15 @@ export function AccountConnector() {
         apiSecret,
         accessToken,
         status: "CONNECTED",
-        balance: data.balance,
-        connectedAt: data.connectedAt,
-        userId: data.userId,
+        balance: Number(data.balance) || 0,
+        connectedAt: typeof data.connectedAt === "string" ? data.connectedAt : new Date().toISOString(),
+        userId: typeof data.userId === "string" ? data.userId : undefined,
       };
 
       connectBroker(account);
       addActivity(
         "CONNECT",
-        `Connected to ${brokerInfo.label} (${data.userId})`,
+        `Connected to ${brokerInfo.label} (${data.userId || "unknown"})`,
         "SUCCESS"
       );
     } catch (err) {
