@@ -873,9 +873,13 @@ export const useNSEStore = create<NSEStore>()(
     // On expiry change, clear only session data (not trades from other expiries if any)
     set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
     if (expiry) {
-      // Load from disk ONLY — no NSE fetch on expiry switch.
-      // Data will refresh only on manual refresh or countdown during live market.
-      await loadFromDisk();
+      // Load from disk first. If no data found, allow one NSE fetch
+      // to download the latest closing data for this expiry week.
+      const loaded = await loadFromDisk();
+      if (!loaded) {
+        // No disk data for this expiry — trigger one fetch
+        await get().fetchOptionChain();
+      }
     }
   },
 
@@ -893,9 +897,12 @@ export const useNSEStore = create<NSEStore>()(
       set({ expiryDates, isExpiryLoading: false });
       if (expiryDates.length > 0 && !get().selectedExpiry) {
         set({ selectedExpiry: expiryDates[0] });
-        // Load from disk — don't fetch from NSE on symbol/initial load.
-        // Fetch only triggers on manual refresh or countdown during live market.
-        void loadFromDisk();
+        // Load from disk. If no data found, trigger one NSE fetch
+        // so user sees latest data even when opening off-market.
+        const loaded = await loadFromDisk();
+        if (!loaded) {
+          void get().fetchOptionChain();
+        }
       }
     } catch (err: unknown) {
       set({ error: (err as Error).message, isExpiryLoading: false });
@@ -909,12 +916,16 @@ export const useNSEStore = create<NSEStore>()(
     // ===== OFF-MARKET GATE =====
     // Don't fetch from NSE or save snapshots when market is closed.
     // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
-    // Data already available from:
-    //   1. Zustand persist (optionChain in localStorage from last session)
-    //   2. Disk files (snapshots, signals, trades, delta loaded at expiry change)
-    // This prevents junk snapshots corrupting delta history when app opens off-market.
+    //
+    // EXCEPTION: If no data exists for current expiry (no snapshots on disk
+    // and no optionChain in state), allow ONE fetch from NSE so the user
+    // sees the latest closing data instead of an empty screen.
+    // This also handles: new expiry week, first-time app open, data wiped.
     if (!checkIfMarketOpen()) {
-      return;
+      const { optionChain, snapshots } = get();
+      const hasData = optionChain?.chainData?.length > 0 || snapshots.length > 0;
+      if (hasData) return; // Data exists — show cached, no NSE hit
+      // No data for this expiry — allow one fetch to get closing data
     }
 
     // ===== LIVE MARKET: Full flow (fetch + save + calc + scan + exit check) =====

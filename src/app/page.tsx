@@ -150,8 +150,7 @@ function OptionChainTable() {
           {expiry && !isMarketOpen ? (
             <>
               <p className="t-text-4">Market is closed</p>
-              <p className="text-xs t-text-5 mt-1">Option chain data will refresh when market opens (9:15 AM IST)</p>
-              <p className="text-xs t-text-5 mt-0.5">Last session data is preserved in snapshots</p>
+              <p className="text-xs t-text-5 mt-1">Showing last session data. New data will auto-load at 9:15 AM IST</p>
             </>
           ) : (
             <p className="t-text-4">Select an expiry date to view option chain</p>
@@ -749,9 +748,9 @@ export default function NSEOptionsTool() {
                 variant="outline"
                 size="sm"
                 onClick={() => selectedExpiry && fetchOptionChain(true)}
-                disabled={isLoading || !selectedExpiry || !isMarketOpen}
+                disabled={isLoading || !selectedExpiry}
                 className="t-bg-hover t-border-main hover:t-bg-hover text-sm h-9"
-                title={!isMarketOpen ? "Snapshots save & refresh disabled after market closing" : ""}
+                title={!isMarketOpen ? "Off-market: refreshes only if no cached data exists" : ""}
               >
                 <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isLoading ? "animate-spin" : ""}`} />
                 Refresh
