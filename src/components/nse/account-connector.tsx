@@ -186,8 +186,7 @@ export function AccountConnector() {
   const [showSecrets, setShowSecrets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
-  const [authMode, setAuthMode] = useState<"otp" | "manual">("otp");
-  const [hasSavedCredentials, setHasSavedCredentials] = useState(false); // OTP login (default) or manual token
+  const [hasSavedCredentials, setHasSavedCredentials] = useState(false);
 
   const isConnected = brokerAccount?.status === "CONNECTED";
   const brokerInfo = brokerAccount
@@ -231,49 +230,7 @@ export function AccountConnector() {
     return () => clearInterval(interval);
   }, [isConnected, brokerAccount, updateBrokerBalance]);
 
-  // ── OTP Login Flow: redirect to broker's login page ──
-  const handleOTPLogin = async () => {
-    setError(null);
-    setIsConnecting(true);
-    addActivity("LOGIN", `Initiating OTP login with ${brokerInfo.label}...`, "PENDING");
 
-    try {
-      const res = await fetch("/api/broker/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          broker: selectedBroker,
-          apiKey,
-          apiSecret,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.loginURL) {
-        setError(data.error || "Failed to generate login URL");
-        addActivity("LOGIN", `Failed: ${data.error}`, "FAILED");
-        setIsConnecting(false);
-        return;
-      }
-
-      // Server sets httpOnly cookie with apiKey + apiSecret for callback
-      // Also store in sessionStorage as backup for frontend to retrieve after redirect
-      sessionStorage.setItem("broker_auth", JSON.stringify({
-        broker: selectedBroker,
-        apiKey,
-        apiSecret,
-      }));
-
-      // Redirect to broker's login page
-      addActivity("LOGIN", `Redirecting to ${brokerInfo.label} login...`, "PENDING");
-      window.location.href = data.loginURL;
-    } catch (err) {
-      setError("Network error. Please try again.");
-      addActivity("LOGIN", "Network error", "FAILED");
-      setIsConnecting(false);
-    }
-  };
 
   // ── Manual Token Connect: paste access token directly ──
   const handleManualConnect = async (accessToken: string) => {
@@ -599,51 +556,7 @@ export function AccountConnector() {
                     </Button>
                   </div>
 
-                  {/* Auth Mode Toggle */}
-                  <div className="flex items-center justify-between p-2 t-bg-subtle rounded-lg">
-                    <span className="text-[10px] t-text-5 font-medium">Login Method</span>
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant={authMode === "otp" ? "default" : "ghost"}
-                        size="sm"
-                        className={`text-[10px] h-6 px-2 ${authMode === "otp" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "t-text-5"}`}
-                        onClick={() => setAuthMode("otp")}
-                      >
-                        <LogIn className="h-3 w-3 mr-1" />
-                        OTP
-                      </Button>
-                      <Button
-                        variant={authMode === "manual" ? "default" : "ghost"}
-                        size="sm"
-                        className={`text-[10px] h-6 px-2 ${authMode === "manual" ? "bg-amber-600 hover:bg-amber-700 text-white" : "t-text-5"}`}
-                        onClick={() => setAuthMode("manual")}
-                      >
-                        <KeyRound className="h-3 w-3 mr-1" />
-                        Manual
-                      </Button>
-                    </div>
-                  </div>
-
-                  {hasSavedCredentials && !isConnected && (
-                    <div className="p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-start gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-                      <div className="text-[10px] text-emerald-400/80">
-                        <span className="font-bold">Saved credentials found</span> — API Key & Secret auto-filled from last session. 
-                        Just paste your new access token below.
-                      </div>
-                    </div>
-                  )}
-
-                  {authMode === "otp" && (
-                    <div className="p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
-                      <p className="text-[10px] text-emerald-400/80 flex items-start gap-1.5">
-                        <Shield className="h-3 w-3 mt-0.5 flex-shrink-0" />
-                        Click &quot;Login with OTP&quot; — you will be redirected to your broker&apos;s login page. Enter your credentials + OTP there, then you&apos;ll return here automatically.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
+            )}
 
               {error && (
                 <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2">
