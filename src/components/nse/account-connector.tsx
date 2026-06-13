@@ -245,7 +245,8 @@ export function AccountConnector() {
         return;
       }
 
-      // Store apiKey + apiSecret in sessionStorage so callback can read them
+      // Server sets httpOnly cookie with apiKey + apiSecret for callback
+      // Also store in sessionStorage as backup for frontend to retrieve after redirect
       sessionStorage.setItem("broker_auth", JSON.stringify({
         broker: selectedBroker,
         apiKey,
@@ -313,6 +314,10 @@ export function AccountConnector() {
   };
 
   // ── Handle OAuth callback from broker redirect ──
+  // After successful login, the callback route redirects back here with:
+  // ?broker=ZERODHA&accessToken=xxx&userId=xxx&balance=xxx&status=connected
+  // API credentials (apiKey + apiSecret) were in httpOnly cookie, now consumed by callback
+  // We store them in Zustand for future API calls (balance, positions, orders)
   const handleOAuthCallback = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     const accessToken = params.get("accessToken");
@@ -320,30 +325,36 @@ export function AccountConnector() {
     const balance = params.get("balance");
     const status = params.get("status");
     const callbackError = params.get("error");
+    const broker = params.get("broker") as BrokerName;
+
+    // Clean URL params immediately (they contain sensitive token data)
+    window.history.replaceState({}, "", "/");
 
     if (callbackError) {
       setError(callbackError);
       addActivity("LOGIN", `Failed: ${callbackError}`, "FAILED");
-      // Clean URL
-      window.history.replaceState({}, "", "/");
       return;
     }
 
-    if (status === "connected" && accessToken && userId) {
-      const stored = sessionStorage.getItem("broker_auth");
-      let broker = params.get("broker") as BrokerName || "ZERODHA";
+    if (status === "connected" && accessToken && userId && broker) {
+      // apiKey + apiSecret come from the original login form state
+      // They were also stored in sessionStorage as backup
       let apiKey = "";
       let apiSecret = "";
 
+      const stored = sessionStorage.getItem("broker_auth");
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          broker = parsed.broker || broker;
           apiKey = parsed.apiKey || "";
           apiSecret = parsed.apiSecret || "";
         } catch {}
         sessionStorage.removeItem("broker_auth");
       }
+
+      // If sessionStorage was cleared (browser restart during redirect),
+      // we still have the accessToken — user will need to re-enter apiKey/apiSecret
+      // for balance/position fetches to work, but the connection is alive
 
       const account: BrokerAccount = {
         broker,
@@ -359,10 +370,8 @@ export function AccountConnector() {
       setSelectedBroker(broker);
       connectBroker(account);
       addActivity("LOGIN", `OTP login successful — ${BROKER_INFO[broker]?.label} (${userId})`, "SUCCESS");
-      // Clean URL
-      window.history.replaceState({}, "", "/");
     }
-  }, [connectBroker, addActivity]);
+  }, [connectBroker]);
 
   // Run OAuth callback handler on mount
   useEffect(() => {

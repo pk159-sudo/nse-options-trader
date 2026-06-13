@@ -1,20 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac, createHash } from "crypto";
+import { createHash } from "crypto";
 
 // Broker Callback API — handles OAuth redirect back from broker
 // Each broker sends back different params → we exchange for access_token
 // Then redirect user back to the app with token info
+//
+// SECURITY: api_key + api_secret come from encrypted httpOnly cookie (set by /api/broker/auth)
+// They are NEVER exposed in URL params, browser history, or server logs.
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "";
 
+function decrypt(encoded: string): string {
+  const key = process.env.BROKER_COOKIE_SECRET || "nse-options-trader-2024-secret-key";
+  const decoded = Buffer.from(encoded, "base64url").toString("utf-8");
+  let result = "";
+  for (let i = 0; i < decoded.length; i++) {
+    result += String.fromCharCode(
+      decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+    );
+  }
+  return result;
+}
+
+function readAuthCookie(request: NextRequest): Record<string, string> | null {
+  const cookie = request.cookies.get("broker_auth");
+  if (!cookie?.value) return null;
+  try {
+    return JSON.parse(decrypt(cookie.value));
+  } catch {
+    return null;
+  }
+}
+
+function clearAuthCookie(response: NextResponse) {
+  response.cookies.set("broker_auth", "", {
+    httpOnly: true,
+    secure: APP_URL.startsWith("https"),
+    sameSite: "lax",
+    path: "/api/broker/callback",
+    maxAge: 0, // Delete immediately after use
+  });
+}
+
 function redirectWithToken(
+  response: NextResponse,
   broker: string,
   accessToken: string,
   userId: string,
   balance: number
 ): NextResponse {
-  // Redirect back to the main app with token info in query params
-  // The frontend AccountConnector will pick these up and connect
   const params = new URLSearchParams({
     broker,
     accessToken,
@@ -22,79 +56,94 @@ function redirectWithToken(
     balance: String(balance),
     status: "connected",
   });
-
   return NextResponse.redirect(`${APP_URL || "/"}?${params.toString()}`);
 }
 
-function redirectWithError(error: string): NextResponse {
+function redirectWithError(response: NextResponse, error: string): NextResponse {
   const params = new URLSearchParams({ error, status: "error" });
   return NextResponse.redirect(`${APP_URL || "/"}?${params.toString()}`);
 }
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const broker = searchParams.get("state") || searchParams.get("broker") || "";
+  const brokerFromState = searchParams.get("state") || "";
+
+  // Read encrypted credentials from httpOnly cookie
+  const authData = readAuthCookie(request);
+  if (!authData) {
+    return redirectWithError(
+      new NextResponse(),
+      "Session expired. Please try logging in again."
+    );
+  }
+
+  const { apiKey, apiSecret } = authData;
+  const response = new NextResponse();
 
   try {
-    // ──────────────────────────────
-    //  ZERODHA: request_token in query param
-    // ──────────────────────────────
-    if (broker === "ZERODHA" || searchParams.get("request_token")) {
+    // ──────────────────────────────────────────────────────
+    //  ZERODHA Kite Connect v3
+    //  Params: request_token (from Zerodha redirect)
+    // ──────────────────────────────────────────────────────
+    if (
+      brokerFromState === "ZERODHA" ||
+      searchParams.get("request_token")
+    ) {
+      clearAuthCookie(response);
+
       const requestToken = searchParams.get("request_token");
-      const apiKey = searchParams.get("api_key");
-
-      if (!requestToken || !apiKey) {
-        return redirectWithError("Missing request_token or api_key from Zerodha");
-      }
-
-      // We need the API Secret for checksum — stored temporarily in the auth flow
-      // For now, we use the apiKey from the callback URL params
-      // The checksum = SHA256(api_key + request_token + api_secret)
-      // Since we can't securely pass api_secret through URL, we store it
-      // temporarily and retrieve it here
-
-      // Exchange request_token for access_token via Kite session API
-      const checksumUrl = `https://api.kite.trade/session/token`;
-
-      // Read apiSecret from a temp storage (passed via hidden state in URL-encoded form)
-      // In production, use server-side session/DB. For now, we pass it encoded.
-      const apiSecret = searchParams.get("api_secret") || "";
-
-      if (!apiSecret) {
+      if (!requestToken || !apiKey || !apiSecret) {
         return redirectWithError(
-          "API Secret required for Zerodha token exchange. Please ensure it was entered."
+          response,
+          "Missing request_token or credentials for Zerodha"
         );
       }
 
+      // Generate checksum: SHA256(api_key + request_token + api_secret)
       const checksum = createHash("sha256")
         .update(`${apiKey}${requestToken}${apiSecret}`)
         .digest("hex");
 
-      const res = await fetch(checksumUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "X-Kite-Version": "3",
-        },
-        body: `api_key=${encodeURIComponent(apiKey)}&request_token=${encodeURIComponent(requestToken)}&checksum=${checksum}`,
-      });
+      // Exchange request_token → access_token via Kite session API
+      const res = await fetch(
+        "https://api.kite.trade/session/token",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Kite-Version": "3",
+          },
+          body: new URLSearchParams({
+            api_key: apiKey,
+            request_token: requestToken,
+            checksum: checksum,
+          }).toString(),
+        }
+      );
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         return redirectWithError(
-          err.message || `Zerodha token exchange failed (${res.status})`
+          response,
+          (err as { message?: string }).message ||
+            `Zerodha token exchange failed (${res.status})`
         );
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as {
+        data?: { access_token?: string; user_id?: string };
+      };
       const accessToken = data.data?.access_token || "";
       const userId = data.data?.user_id || "";
 
       if (!accessToken) {
-        return redirectWithError("No access_token received from Zerodha");
+        return redirectWithError(
+          response,
+          "No access_token received from Zerodha"
+        );
       }
 
-      // Fetch balance
+      // Fetch margin/balance
       let balance = 0;
       try {
         const marginRes = await fetch(
@@ -107,57 +156,79 @@ export async function GET(request: NextRequest) {
           }
         );
         if (marginRes.ok) {
-          const marginData = await marginRes.json();
+          const marginData = (await marginRes.json()) as {
+            equity?: Array<{ net?: number }>;
+          };
           balance = marginData.equity?.[0]?.net || 0;
         }
       } catch {
         // Balance fetch failed — still connect with 0
       }
 
-      return redirectWithToken("ZERODHA", accessToken, userId, balance);
+      return redirectWithToken(
+        response,
+        "ZERODHA",
+        accessToken,
+        userId,
+        balance
+      );
     }
 
-    // ──────────────────────────────
-    //  UPSTOX: code in query param
-    // ──────────────────────────────
-    if (broker === "UPSTOX" || searchParams.get("code")) {
+    // ──────────────────────────────────────────────────────
+    //  UPSTOX v2
+    //  Params: code (authorization code from Upstox redirect)
+    // ──────────────────────────────────────────────────────
+    if (brokerFromState === "UPSTOX" || searchParams.get("code")) {
+      clearAuthCookie(response);
+
       const code = searchParams.get("code");
-      const apiKey = searchParams.get("api_key");
-
-      if (!code) {
-        return redirectWithError("Missing authorization code from Upstox");
-      }
-
-      const redirectUri = encodeURIComponent(
-        `${APP_URL}/api/broker/callback`
-      );
-
-      // Exchange code for access_token
-      const res = await fetch("https://api.upstox.com/v2/login/authorization-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code,
-          client_id: apiKey,
-          client_secret: "", // Upstox doesn't use client_secret for web flow
-          redirect_uri: redirectUri,
-          grant_type: "authorization_code",
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+      if (!code || !apiKey) {
         return redirectWithError(
-          err.errors?.[0]?.message || `Upstox token exchange failed (${res.status})`
+          response,
+          "Missing authorization code or API key for Upstox"
         );
       }
 
-      const data = await res.json();
+      const redirectUri =
+        `${APP_URL}/api/broker/callback`;
+
+      // Exchange authorization code → access_token
+      const res = await fetch(
+        "https://api.upstox.com/v2/login/authorization-token",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code,
+            client_id: apiKey,
+            client_secret: apiSecret || "",
+            redirect_uri: redirectUri,
+            grant_type: "authorization_code",
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const errors = (err as { errors?: Array<{ message?: string }> }).errors;
+        return redirectWithError(
+          response,
+          errors?.[0]?.message ||
+            `Upstox token exchange failed (${res.status})`
+        );
+      }
+
+      const data = (await res.json()) as {
+        data?: { access_token?: string; user_id?: string; user_name?: string };
+      };
       const accessToken = data.data?.access_token || "";
-      const userId = data.data?.user_id || "";
+      const userId = data.data?.user_id || data.data?.user_name || "";
 
       if (!accessToken) {
-        return redirectWithError("No access_token received from Upstox");
+        return redirectWithError(
+          response,
+          "No access_token received from Upstox"
+        );
       }
 
       // Fetch balance
@@ -173,7 +244,11 @@ export async function GET(request: NextRequest) {
           }
         );
         if (fundRes.ok) {
-          const fundData = await fundRes.json();
+          const fundData = (await fundRes.json()) as {
+            data?: {
+              equity?: { available_margin?: number; net?: number };
+            };
+          };
           balance =
             Number(fundData.data?.equity?.available_margin) ||
             Number(fundData.data?.equity?.net) ||
@@ -183,29 +258,43 @@ export async function GET(request: NextRequest) {
         // Balance fetch failed
       }
 
-      return redirectWithToken("UPSTOX", accessToken, userId, balance);
+      return redirectWithToken(
+        response,
+        "UPSTOX",
+        accessToken,
+        userId,
+        balance
+      );
     }
 
-    // ──────────────────────────────
-    //  ANGEL ONE: auth_code in query param
-    // ──────────────────────────────
-    if (broker === "ANGEL_ONE" || searchParams.get("auth_code")) {
-      const authCode = searchParams.get("auth_code") || searchParams.get("code");
-      const apiKey = searchParams.get("api_key");
-      const clientCode = searchParams.get("client_code") || "";
+    // ──────────────────────────────────────────────────────
+    //  ANGEL ONE SmartAPI
+    //  Params: auth_code (from Angel One redirect)
+    // ──────────────────────────────────────────────────────
+    if (brokerFromState === "ANGEL_ONE" || searchParams.get("auth_code")) {
+      clearAuthCookie(response);
 
-      if (!authCode || !apiKey) {
+      const authCode =
+        searchParams.get("auth_code") || searchParams.get("code");
+      if (!authCode || !apiKey || !apiSecret) {
         return redirectWithError(
-          "Missing auth_code or api_key from Angel One"
+          response,
+          "Missing auth_code or credentials for Angel One"
         );
       }
 
-      // Exchange auth_code for session token
+      // Exchange auth_code → session token
+      // Angel One requires: authorization_code in body, api_key in header
       const res = await fetch(
         "https://apiconnect.angelbroking.com/rest/auth/authorize/v2",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-SourceID": apiKey,
+            "X-ClientCode": apiSecret, // client_code = apiSecret in our convention
+          },
           body: JSON.stringify({
             authorization_code: authCode,
           }),
@@ -215,16 +304,23 @@ export async function GET(request: NextRequest) {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         return redirectWithError(
-          err.message || `Angel One token exchange failed (${res.status})`
+          response,
+          (err as { message?: string }).message ||
+            `Angel One token exchange failed (${res.status})`
         );
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as {
+        data?: { jwtToken?: string; access_token?: string; clientCode?: string };
+      };
       const accessToken = data.data?.jwtToken || data.data?.access_token || "";
-      const userId = clientCode || data.data?.clientCode || "";
+      const userId = data.data?.clientCode || apiSecret;
 
       if (!accessToken) {
-        return redirectWithError("No token received from Angel One");
+        return redirectWithError(
+          response,
+          "No token received from Angel One"
+        );
       }
 
       // Fetch balance
@@ -242,34 +338,46 @@ export async function GET(request: NextRequest) {
           }
         );
         if (rmsRes.ok) {
-          const rmsData = await rmsRes.json();
-          balance =
-            Number(rmsData.data?.net) || Number(rmsData.data?.cash) || 0;
+          const rmsData = (await rmsRes.json()) as {
+            data?: { net?: number; cash?: number };
+          };
+          balance = Number(rmsData.data?.net) || Number(rmsData.data?.cash) || 0;
         }
       } catch {
         // Balance fetch failed
       }
 
-      return redirectWithToken("ANGEL_ONE", accessToken, userId, balance);
+      return redirectWithToken(
+        response,
+        "ANGEL_ONE",
+        accessToken,
+        userId,
+        balance
+      );
     }
 
-    // ──────────────────────────────
-    //  DHAN: code in query param
-    // ──────────────────────────────
-    if (broker === "DHAN") {
-      const code = searchParams.get("code");
-      const apiKey = searchParams.get("api_key");
+    // ──────────────────────────────────────────────────────
+    //  DHAN v2
+    //  Params: code (authorization code from Dhan redirect)
+    // ──────────────────────────────────────────────────────
+    if (brokerFromState === "DHAN") {
+      clearAuthCookie(response);
 
-      if (!code) {
-        return redirectWithError("Missing authorization code from Dhan");
+      const code = searchParams.get("code");
+      if (!code || !apiKey) {
+        return redirectWithError(
+          response,
+          "Missing authorization code or API key for Dhan"
+        );
       }
 
-      // Exchange code for access_token
+      // Exchange authorization code → access_token
       const res = await fetch("https://api.dhan.co/v2/auth/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: apiKey,
+          client_secret: apiSecret || "",
           authorization_code: code,
           grant_type: "authorization_code",
         }),
@@ -278,16 +386,23 @@ export async function GET(request: NextRequest) {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         return redirectWithError(
-          err.error_message || `Dhan token exchange failed (${res.status})`
+          response,
+          (err as { error_message?: string }).error_message ||
+            `Dhan token exchange failed (${res.status})`
         );
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as {
+        access_token?: string;
+      };
       const accessToken = data.access_token || "";
-      const userId = apiKey || "";
+      const userId = apiKey;
 
       if (!accessToken) {
-        return redirectWithError("No access_token received from Dhan");
+        return redirectWithError(
+          response,
+          "No access_token received from Dhan"
+        );
       }
 
       // Fetch balance
@@ -297,21 +412,34 @@ export async function GET(request: NextRequest) {
           headers: { "access-token": accessToken },
         });
         if (fundRes.ok) {
-          const fundData = await fundRes.json();
-          balance =
-            Number(fundData.equity_amount?.available_balance) || 0;
+          const fundData = (await fundRes.json()) as {
+            equity_amount?: { available_balance?: number };
+          };
+          balance = Number(fundData.equity_amount?.available_balance) || 0;
         }
       } catch {
         // Balance fetch failed
       }
 
-      return redirectWithToken("DHAN", accessToken, userId, balance);
+      return redirectWithToken(
+        response,
+        "DHAN",
+        accessToken,
+        userId,
+        balance
+      );
     }
 
-    return redirectWithError("Unknown broker or missing callback parameters");
+    // No broker matched
+    clearAuthCookie(response);
+    return redirectWithError(
+      response,
+      "Unknown broker or missing callback parameters"
+    );
   } catch (error) {
     console.error("Broker callback error:", error);
     return redirectWithError(
+      response,
       error instanceof Error ? error.message : "OAuth callback failed"
     );
   }
