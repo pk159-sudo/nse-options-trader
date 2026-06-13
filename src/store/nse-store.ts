@@ -667,6 +667,8 @@ interface NSEStore {
   setTradeMode: (mode: TradeMode) => void;
   approveSignal: (signalId: string) => void;
   rejectSignal: (signalId: string) => void;
+  closeTrade: (tradeId: string) => void;
+  closeAllTrades: () => void;
   connectBroker: (account: BrokerAccount) => void;
   disconnectBroker: () => void;
   updateBrokerBalance: (balance: number) => void;
@@ -1395,6 +1397,92 @@ export const useNSEStore = create<NSEStore>()(
     const rejected = updatedSignals.find((s) => s.id === signalId);
     if (rejected) {
       void get().saveSignalToFile(rejected);
+    }
+  },
+
+  closeTrade: (tradeId) => {
+    const state = get();
+    const trade = state.trades.find((t) => t.id === tradeId);
+    if (!trade || trade.status !== "OPEN") return;
+
+    // Get current LTP from option chain for exit price
+    const chainData = state.optionChain?.chainData;
+    let exitPrice = trade.entryPrice; // fallback to entry if no LTP available
+    if (chainData && Array.isArray(chainData)) {
+      for (const rawItem of chainData) {
+        const item = rawItem as unknown as { strikePrice?: number; CE?: { lastPrice?: number }; PE?: { lastPrice?: number } };
+        if (item.strikePrice === trade.strike) {
+          exitPrice = trade.signalType === "BULLISH"
+            ? (item.CE?.lastPrice || trade.entryPrice)
+            : (item.PE?.lastPrice || trade.entryPrice);
+          break;
+        }
+      }
+    }
+
+    const pnl = (exitPrice - trade.entryPrice) * LOT_SIZE;
+    const profitPct = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+
+    const updatedTrade: Trade = {
+      ...trade,
+      status: "CLOSED",
+      exitPrice,
+      pnl,
+      highestProfitPct: Math.max(trade.highestProfitPct, profitPct > 0 ? profitPct : 0),
+      priceHistory: [...trade.priceHistory, { time: timeStr, price: exitPrice }],
+    };
+
+    const updatedTrades = state.trades.map((t) =>
+      t.id === tradeId ? updatedTrade : t
+    );
+    set({ trades: updatedTrades });
+    void get().saveTradeToFile(updatedTrade);
+
+    // If real trade with broker, place exit order (SELL)
+    if (trade.isRealTrade && trade.brokerName && state.brokerAccount) {
+      const acc = state.brokerAccount;
+      fetch("/api/broker/place-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          broker: acc.broker,
+          accessToken: acc.accessToken,
+          apiKey: acc.apiKey,
+          apiSecret: acc.apiSecret,
+          symbol: "NIFTY",
+          strikePrice: trade.strike,
+          optionType: trade.signalType === "BULLISH" ? "CE" : "PE",
+          transactionType: "SELL",
+          quantity: LOT_SIZES["NIFTY"] || LOT_SIZE,
+          price: exitPrice,
+          orderType: "MARKET",
+          product: "MIS",
+        }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            console.log(`Manual close order placed: ${data.orderId}`);
+          } else {
+            console.error(`Close order failed: ${data.error}`);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to place close order:", err);
+        });
+    }
+  },
+
+  closeAllTrades: () => {
+    const state = get();
+    const openTrades = state.trades.filter((t) => t.status === "OPEN");
+    if (openTrades.length === 0) return;
+
+    // Close each open trade
+    for (const trade of openTrades) {
+      get().closeTrade(trade.id);
     }
   },
 

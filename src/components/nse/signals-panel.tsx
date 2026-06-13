@@ -22,6 +22,8 @@ import {
   Crosshair,
   Activity,
   Wallet,
+  XCircle,
+  Square,
 } from "lucide-react";
 
 const LOT_SIZE = 65;
@@ -53,9 +55,11 @@ function timeSince(timeStr: string): string {
 function SmartTradeCard({
   trade,
   currentLTP,
+  onClose,
 }: {
   trade: Trade;
   currentLTP: number;
+  onClose?: () => void;
 }) {
   const isBullish = trade.signalType === "BULLISH";
   const isOpen = trade.status === "OPEN";
@@ -168,6 +172,16 @@ function SmartTradeCard({
               </div>
             </div>
           </>
+        )}
+
+        {isOpen && onClose && (
+          <button
+            onClick={onClose}
+            className="w-full mt-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/30 transition-colors text-[11px] font-bold cursor-pointer"
+          >
+            <XCircle className="h-3.5 w-3.5" />
+            Manually Close
+          </button>
         )}
 
         {!isOpen && (
@@ -541,7 +555,7 @@ function PerformanceStats({ trades, unrealizedPnl }: { trades: Trade[]; unrealiz
 }
 
 export function SignalsPanel() {
-  const { signals, trades, oiThreshold, setOIThreshold, snapshots, optionChain } = useNSEStore();
+  const { signals, trades, oiThreshold, setOIThreshold, snapshots, optionChain, closeTrade, closeAllTrades } = useNSEStore();
 
   const openTrades = trades.filter((t) => t.status === "OPEN");
   const closedTrades = trades.filter((t) => t.status === "CLOSED");
@@ -672,10 +686,21 @@ export function SignalsPanel() {
             <CardContent className="space-y-3">
               {openTrades.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
-                    <AlertTriangle className="h-3 w-3" />
-                    Open Positions
-                  </h4>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
+                      <AlertTriangle className="h-3 w-3" />
+                      Open Positions ({openTrades.length})
+                    </h4>
+                    {openTrades.length > 1 && (
+                      <button
+                        onClick={closeAllTrades}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-[10px] font-bold cursor-pointer"
+                      >
+                        <Square className="h-3 w-3" />
+                        Close All
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     {openTrades.map((trade) => {
                       const ltp = ltpMap.get(trade.strike);
@@ -687,6 +712,7 @@ export function SignalsPanel() {
                           key={`open-${trade.id}`}
                           trade={trade}
                           currentLTP={currentLTP}
+                          onClose={() => closeTrade(trade.id)}
                         />
                       );
                     })}
