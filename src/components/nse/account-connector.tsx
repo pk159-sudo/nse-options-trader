@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   useNSEStore,
   BrokerName,
@@ -37,6 +37,8 @@ import {
   Info,
   Zap,
   Paperclip,
+  LogIn,
+  KeyRound,
 } from "lucide-react";
 
 const BROKER_INFO: Record<
@@ -125,6 +127,46 @@ function timeSince(isoString: string): string {
   }
 }
 
+// Manual token input form (for users who already have an access token)
+function ManualTokenForm({
+  disabled,
+  onSubmit,
+  isSubmitting,
+}: {
+  disabled: boolean;
+  onSubmit: (token: string) => void;
+  isSubmitting: boolean;
+}) {
+  const [token, setToken] = useState("");
+
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label className="text-xs t-text-4">Access Token</Label>
+        <Input
+          type="text"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="Paste your access token here"
+          className="t-bg-hover t-border-main text-sm h-9 font-mono"
+        />
+      </div>
+      <Button
+        onClick={() => token && onSubmit(token)}
+        disabled={disabled || !token || isSubmitting}
+        className="w-full bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
+      >
+        {isSubmitting ? (
+          <Activity className="h-4 w-4 mr-2 animate-spin" />
+        ) : (
+          <KeyRound className="h-4 w-4 mr-2" />
+        )}
+        {isSubmitting ? "Connecting..." : "Connect with Token"}
+      </Button>
+    </div>
+  );
+}
+
 export function AccountConnector() {
   const {
     brokerAccount,
@@ -140,11 +182,11 @@ export function AccountConnector() {
   const [selectedBroker, setSelectedBroker] = useState<BrokerName>("ZERODHA");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
-  const [accessToken, setAccessToken] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const [authMode, setAuthMode] = useState<"otp" | "manual">("otp"); // OTP login (default) or manual token
 
   const isConnected = brokerAccount?.status === "CONNECTED";
   const brokerInfo = brokerAccount
@@ -177,7 +219,51 @@ export function AccountConnector() {
     return () => clearInterval(interval);
   }, [isConnected, brokerAccount, updateBrokerBalance]);
 
-  const handleConnect = async () => {
+  // ── OTP Login Flow: redirect to broker's login page ──
+  const handleOTPLogin = async () => {
+    setError(null);
+    setIsConnecting(true);
+    addActivity("LOGIN", `Initiating OTP login with ${brokerInfo.label}...`, "PENDING");
+
+    try {
+      const res = await fetch("/api/broker/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          broker: selectedBroker,
+          apiKey,
+          apiSecret,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.loginURL) {
+        setError(data.error || "Failed to generate login URL");
+        addActivity("LOGIN", `Failed: ${data.error}`, "FAILED");
+        setIsConnecting(false);
+        return;
+      }
+
+      // Store apiKey + apiSecret in sessionStorage so callback can read them
+      sessionStorage.setItem("broker_auth", JSON.stringify({
+        broker: selectedBroker,
+        apiKey,
+        apiSecret,
+      }));
+
+      // Redirect to broker's login page
+      addActivity("LOGIN", `Redirecting to ${brokerInfo.label} login...`, "PENDING");
+      window.location.href = data.loginURL;
+    } catch (err) {
+      setError("Network error. Please try again.");
+      addActivity("LOGIN", "Network error", "FAILED");
+      setIsConnecting(false);
+    }
+  };
+
+  // ── Manual Token Connect: paste access token directly ──
+  const handleManualConnect = async (accessToken: string) => {
     setError(null);
     setIsConnecting(true);
 
@@ -226,6 +312,63 @@ export function AccountConnector() {
     }
   };
 
+  // ── Handle OAuth callback from broker redirect ──
+  const handleOAuthCallback = useCallback(() => {
+    const params = new URLSearchParams(window.location.search);
+    const accessToken = params.get("accessToken");
+    const userId = params.get("userId");
+    const balance = params.get("balance");
+    const status = params.get("status");
+    const callbackError = params.get("error");
+
+    if (callbackError) {
+      setError(callbackError);
+      addActivity("LOGIN", `Failed: ${callbackError}`, "FAILED");
+      // Clean URL
+      window.history.replaceState({}, "", "/");
+      return;
+    }
+
+    if (status === "connected" && accessToken && userId) {
+      const stored = sessionStorage.getItem("broker_auth");
+      let broker = params.get("broker") as BrokerName || "ZERODHA";
+      let apiKey = "";
+      let apiSecret = "";
+
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          broker = parsed.broker || broker;
+          apiKey = parsed.apiKey || "";
+          apiSecret = parsed.apiSecret || "";
+        } catch {}
+        sessionStorage.removeItem("broker_auth");
+      }
+
+      const account: BrokerAccount = {
+        broker,
+        apiKey,
+        apiSecret,
+        accessToken,
+        status: "CONNECTED",
+        balance: Number(balance) || 0,
+        connectedAt: new Date().toISOString(),
+        userId,
+      };
+
+      setSelectedBroker(broker);
+      connectBroker(account);
+      addActivity("LOGIN", `OTP login successful — ${BROKER_INFO[broker]?.label} (${userId})`, "SUCCESS");
+      // Clean URL
+      window.history.replaceState({}, "", "/");
+    }
+  }, [connectBroker, addActivity]);
+
+  // Run OAuth callback handler on mount
+  useEffect(() => {
+    handleOAuthCallback();
+  }, [handleOAuthCallback]);
+
   const handleDisconnect = () => {
     if (brokerAccount) {
       addActivity(
@@ -237,7 +380,6 @@ export function AccountConnector() {
     disconnectBroker();
     setApiKey("");
     setApiSecret("");
-    setAccessToken("");
   };
 
   const addActivity = (
@@ -391,7 +533,7 @@ export function AccountConnector() {
               {brokerInfo.hasAPI && (
                 <div className="space-y-2.5">
                   <div className="space-y-1.5">
-                    <Label className="text-xs t-text-4">API Key</Label>
+                    <Label className="text-xs t-text-4">API Key (App Key)</Label>
                     <Input
                       type={showSecrets ? "text" : "password"}
                       value={apiKey}
@@ -401,22 +543,14 @@ export function AccountConnector() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs t-text-4">API Secret</Label>
+                    <Label className="text-xs t-text-4">
+                      {selectedBroker === "ANGEL_ONE" ? "Client Code" : "API Secret"}
+                    </Label>
                     <Input
                       type={showSecrets ? "text" : "password"}
                       value={apiSecret}
                       onChange={(e) => setApiSecret(e.target.value)}
-                      placeholder="Enter your API secret"
-                      className="t-bg-hover t-border-main text-sm h-9 font-mono"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs t-text-4">Access Token</Label>
-                    <Input
-                      type={showSecrets ? "text" : "password"}
-                      value={accessToken}
-                      onChange={(e) => setAccessToken(e.target.value)}
-                      placeholder="Enter your access token"
+                      placeholder={selectedBroker === "ANGEL_ONE" ? "Enter your client code" : "Enter your API secret"}
                       className="t-bg-hover t-border-main text-sm h-9 font-mono"
                     />
                   </div>
@@ -432,9 +566,43 @@ export function AccountConnector() {
                       ) : (
                         <Eye className="h-3 w-3 mr-1" />
                       )}
-                      {showSecrets ? "Hide" : "Show"} credentials
+                      {showSecrets ? "Hide" : "Show"}
                     </Button>
                   </div>
+
+                  {/* Auth Mode Toggle */}
+                  <div className="flex items-center justify-between p-2 t-bg-subtle rounded-lg">
+                    <span className="text-[10px] t-text-5 font-medium">Login Method</span>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant={authMode === "otp" ? "default" : "ghost"}
+                        size="sm"
+                        className={`text-[10px] h-6 px-2 ${authMode === "otp" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "t-text-5"}`}
+                        onClick={() => setAuthMode("otp")}
+                      >
+                        <LogIn className="h-3 w-3 mr-1" />
+                        OTP
+                      </Button>
+                      <Button
+                        variant={authMode === "manual" ? "default" : "ghost"}
+                        size="sm"
+                        className={`text-[10px] h-6 px-2 ${authMode === "manual" ? "bg-amber-600 hover:bg-amber-700 text-white" : "t-text-5"}`}
+                        onClick={() => setAuthMode("manual")}
+                      >
+                        <KeyRound className="h-3 w-3 mr-1" />
+                        Manual
+                      </Button>
+                    </div>
+                  </div>
+
+                  {authMode === "otp" && (
+                    <div className="p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
+                      <p className="text-[10px] text-emerald-400/80 flex items-start gap-1.5">
+                        <Shield className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                        Click &quot;Login with OTP&quot; — you will be redirected to your broker&apos;s login page. Enter your credentials + OTP there, then you&apos;ll return here automatically.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -445,33 +613,62 @@ export function AccountConnector() {
                 </div>
               )}
 
-              <Button
-                onClick={handleConnect}
-                disabled={
-                  isConnecting ||
-                  (brokerInfo.hasAPI && (!apiKey || !apiSecret || !accessToken))
-                }
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold"
-              >
-                {isConnecting ? (
-                  <>
-                    <Activity className="h-4 w-4 mr-2 animate-spin" />
-                    Connecting...
-                  </>
-                ) : (
-                  <>
-                    <Link2 className="h-4 w-4 mr-2" />
-                    Connect {brokerInfo.label}
-                  </>
-                )}
-              </Button>
+              {brokerInfo.hasAPI && authMode === "otp" && (
+                <Button
+                  onClick={handleOTPLogin}
+                  disabled={isConnecting || (brokerInfo.hasAPI && !apiKey)}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold"
+                >
+                  {isConnecting ? (
+                    <>
+                      <Activity className="h-4 w-4 mr-2 animate-spin" />
+                      Redirecting to login...
+                    </>
+                  ) : (
+                    <>
+                      <LogIn className="h-4 w-4 mr-2" />
+                      Login with OTP
+                    </>
+                  )}
+                </Button>
+              )}
+
+              {brokerInfo.hasAPI && authMode === "manual" && (
+                <ManualTokenForm
+                  disabled={isConnecting || !apiKey}
+                  onSubmit={(token) => handleManualConnect(token)}
+                  isSubmitting={isConnecting}
+                />
+              )}
+
+              {!brokerInfo.hasAPI && (
+                <Button
+                  onClick={() => {
+                    const account: BrokerAccount = {
+                      broker: selectedBroker,
+                      apiKey: "",
+                      apiSecret: "",
+                      accessToken: "",
+                      status: "CONNECTED",
+                      balance: 0,
+                      connectedAt: new Date().toISOString(),
+                      userId: "PAPER_TRADE",
+                    };
+                    connectBroker(account);
+                    addActivity("CONNECT", "Paper trade connected", "SUCCESS");
+                  }}
+                  className="w-full bg-yellow-600 hover:bg-yellow-700 text-white text-sm font-bold"
+                >
+                  <Link2 className="h-4 w-4 mr-2" />
+                  Connect Paper Trade
+                </Button>
+              )}
 
               <div className="flex items-start gap-2 p-2 t-bg-subtle rounded-lg">
                 <Shield className="h-3.5 w-3.5 t-text-5 mt-0.5 flex-shrink-0" />
                 <p className="text-[10px] t-text-5 leading-relaxed">
                   Credentials are stored locally in your browser only. API calls
-                  are made server-side for security. Never share your access
-                  token.
+                  are made server-side. OTP login goes through your broker&apos;s secure login page.
                 </p>
               </div>
             </div>
