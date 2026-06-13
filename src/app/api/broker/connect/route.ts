@@ -109,8 +109,17 @@ export async function POST(request: NextRequest) {
     } catch (err: unknown) {
       errorMsg = err instanceof Error ? err.message : "Authentication failed";
       console.error(`Broker connect [${broker}] error:`, errorMsg);
+
+      // Give user-friendly error messages
+      let userError = errorMsg;
+      if (errorMsg.includes("Invalid response") || errorMsg.includes("HTML page")) {
+        userError = `Could not reach ${broker}. Possible reasons: wrong API key, expired access token, or broker is under maintenance.`;
+      } else if (errorMsg.includes("401") || errorMsg.includes("403")) {
+        userError = `Authentication failed. Your API key or access token is invalid/expired.`;
+      }
+
       return NextResponse.json(
-        { error: `Connection failed: ${errorMsg}` },
+        { error: userError },
         { status: 401 }
       );
     }
