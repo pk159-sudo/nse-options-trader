@@ -115,12 +115,6 @@ function SmartTradeCard({
             <span className={`text-[11px] font-mono font-bold px-1.5 py-0.5 rounded ${isBullish ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>{optionLabel}</span>
             <span className={`text-[11px] t-text-5 font-semibold px-1.5 py-0.5 rounded ${isBullish ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>{tradeAction}</span>
             <span className="text-[11px] t-text-4 font-semibold uppercase tracking-[0.08em]">EXP {trade.expiry}</span>
-            {trade.createdAt && (
-              <span className="text-[11px] t-text-4 font-medium flex items-center gap-0.5">
-                <Clock className="h-3 w-3" />
-                {formatCreatedAt(trade.createdAt)}
-              </span>
-            )}
           </div>
           <div className="text-right">
             <span className={`text-base font-bold font-mono ${pnlColor}`}>
@@ -207,9 +201,17 @@ function SmartTradeCard({
 
         {!isOpen && (
           <div className="flex items-center justify-between text-[11px]">
-            <span className={`px-2 py-0.5 rounded-full font-bold ${trade.pnl > 0 ? "bg-emerald-500/15 text-emerald-400" : trade.pnl < 0 ? "bg-red-500/15 text-red-400" : "t-text-7 t-text-4"}`}>
-              {trade.pnl > 0 ? "WIN" : trade.pnl < 0 ? "LOSS" : "BE"}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={`px-2 py-0.5 rounded-full font-bold ${trade.pnl > 0 ? "bg-emerald-500/15 text-emerald-400" : trade.pnl < 0 ? "bg-red-500/15 text-red-400" : "t-text-7 t-text-4"}`}>
+                {trade.pnl > 0 ? "WIN" : trade.pnl < 0 ? "LOSS" : "BE"}
+              </span>
+              {trade.createdAt && (
+                <span className="t-text-4 font-medium flex items-center gap-0.5">
+                  <Calendar className="h-3 w-3" />
+                  {formatCreatedAt(trade.createdAt)}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-3">
               <span className="t-text-4 font-medium flex items-center gap-0.5">
                 <ArrowUpRight className="h-3 w-3 text-emerald-400" />
