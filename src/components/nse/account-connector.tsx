@@ -37,7 +37,6 @@ import {
   Info,
   Zap,
   Paperclip,
-  LogIn,
   KeyRound,
 } from "lucide-react";
 
@@ -74,7 +73,7 @@ const BROKER_INFO: Record<
     bgColor: "bg-purple-500/10",
     borderColor: "border-purple-500/30",
     hasAPI: true,
-    description: "Upstox API v2 with OAuth support.",
+    description: "Upstox API v2. Get access token from developer portal.",
   },
   DHAN: {
     label: "Dhan",
@@ -82,7 +81,7 @@ const BROKER_INFO: Record<
     bgColor: "bg-emerald-500/10",
     borderColor: "border-emerald-500/30",
     hasAPI: true,
-    description: "Dhan consent-based OAuth (3-step). Needs API Key + API Secret for OTP login.",
+    description: "Dhan API trading. Get access token from web.dhan.co (valid 24 hrs).",
   },
   GROWW: {
     label: "Groww",
@@ -127,7 +126,7 @@ function timeSince(isoString: string): string {
   }
 }
 
-// Manual token input form (for users who already have an access token)
+// Manual token input form
 function ManualTokenForm({
   disabled,
   onSubmit,
@@ -195,14 +194,14 @@ export function AccountConnector() {
 
   // Auto-fill API key + secret from last saved connection (persisted in localStorage)
   useEffect(() => {
-    if (isConnected) return; // Don't overwrite when connected
+    if (isConnected) return;
     if (brokerAccount?.apiKey) {
       setSelectedBroker(brokerAccount.broker);
       setApiKey(brokerAccount.apiKey);
       setApiSecret(brokerAccount.apiSecret);
       setHasSavedCredentials(true);
     }
-  }, [isConnected]); // Only run once on mount or when connection status changes
+  }, [isConnected, brokerAccount]);
 
   useEffect(() => {
     if (!isConnected || !brokerAccount) return;
@@ -230,8 +229,6 @@ export function AccountConnector() {
     return () => clearInterval(interval);
   }, [isConnected, brokerAccount, updateBrokerBalance]);
 
-
-
   // ── Manual Token Connect: paste access token directly ──
   const handleManualConnect = async (accessToken: string) => {
     setError(null);
@@ -253,7 +250,7 @@ export function AccountConnector() {
       try {
         data = await res.json();
       } catch {
-        setError("Server error — please try again. If this persists, restart the app.");
+        setError("Server error — please try again.");
         addActivity("CONNECT", "Server returned invalid response", "FAILED");
         return;
       }
@@ -290,11 +287,7 @@ export function AccountConnector() {
     }
   };
 
-  // ── Handle OAuth callback from broker redirect ──
-  // After successful login, the callback route redirects back here with:
-  // ?broker=ZERODHA&accessToken=xxx&userId=xxx&balance=xxx&status=connected
-  // API credentials (apiKey + apiSecret) were in httpOnly cookie, now consumed by callback
-  // We store them in Zustand for future API calls (balance, positions, orders)
+  // ── Handle OAuth callback from broker redirect (legacy support) ──
   const handleOAuthCallback = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     const accessToken = params.get("accessToken");
@@ -304,7 +297,6 @@ export function AccountConnector() {
     const callbackError = params.get("error");
     const broker = params.get("broker") as BrokerName;
 
-    // Clean URL params immediately (they contain sensitive token data)
     window.history.replaceState({}, "", "/");
 
     if (callbackError) {
@@ -314,29 +306,23 @@ export function AccountConnector() {
     }
 
     if (status === "connected" && accessToken && userId && broker) {
-      // apiKey + apiSecret come from the original login form state
-      // They were also stored in sessionStorage as backup
-      let apiKey = "";
-      let apiSecret = "";
+      let savedApiKey = "";
+      let savedApiSecret = "";
 
       const stored = sessionStorage.getItem("broker_auth");
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          apiKey = parsed.apiKey || "";
-          apiSecret = parsed.apiSecret || "";
+          savedApiKey = parsed.apiKey || "";
+          savedApiSecret = parsed.apiSecret || "";
         } catch {}
         sessionStorage.removeItem("broker_auth");
       }
 
-      // If sessionStorage was cleared (browser restart during redirect),
-      // we still have the accessToken — user will need to re-enter apiKey/apiSecret
-      // for balance/position fetches to work, but the connection is alive
-
       const account: BrokerAccount = {
         broker,
-        apiKey,
-        apiSecret,
+        apiKey: savedApiKey,
+        apiSecret: savedApiSecret,
         accessToken,
         status: "CONNECTED",
         balance: Number(balance) || 0,
@@ -346,11 +332,10 @@ export function AccountConnector() {
 
       setSelectedBroker(broker);
       connectBroker(account);
-      addActivity("LOGIN", `OTP login successful — ${BROKER_INFO[broker]?.label} (${userId})`, "SUCCESS");
+      addActivity("LOGIN", `Connected to ${BROKER_INFO[broker]?.label} (${userId})`, "SUCCESS");
     }
   }, [connectBroker]);
 
-  // Run OAuth callback handler on mount
   useEffect(() => {
     handleOAuthCallback();
   }, [handleOAuthCallback]);
@@ -364,8 +349,6 @@ export function AccountConnector() {
       );
     }
     disconnectBroker();
-    // Keep apiKey + apiSecret in inputs — they're saved in brokerAccount (localStorage)
-    // User only needs to paste a new access token next time
   };
 
   const addActivity = (
@@ -556,7 +539,17 @@ export function AccountConnector() {
                     </Button>
                   </div>
 
-            )}
+                  {hasSavedCredentials && (
+                    <div className="p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-start gap-2">
+                      <CheckCircle2 className="h-3.5 w-3 text-emerald-400 mt-0.5 flex-shrink-0" />
+                      <div className="text-[10px] text-emerald-400/80">
+                        <span className="font-bold">Saved credentials found</span> — API Key & Secret auto-filled.
+                        Paste your new access token below to reconnect.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {error && (
                 <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2">
@@ -565,27 +558,7 @@ export function AccountConnector() {
                 </div>
               )}
 
-              {brokerInfo.hasAPI && authMode === "otp" && (
-                <Button
-                  onClick={handleOTPLogin}
-                  disabled={isConnecting || (brokerInfo.hasAPI && !apiKey)}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold"
-                >
-                  {isConnecting ? (
-                    <>
-                      <Activity className="h-4 w-4 mr-2 animate-spin" />
-                      Redirecting to login...
-                    </>
-                  ) : (
-                    <>
-                      <LogIn className="h-4 w-4 mr-2" />
-                      Login with OTP
-                    </>
-                  )}
-                </Button>
-              )}
-
-              {brokerInfo.hasAPI && authMode === "manual" && (
+              {brokerInfo.hasAPI && (
                 <ManualTokenForm
                   disabled={isConnecting || !apiKey}
                   onSubmit={(token) => handleManualConnect(token)}
@@ -617,10 +590,10 @@ export function AccountConnector() {
               )}
 
               <div className="flex items-start gap-2 p-2 t-bg-subtle rounded-lg">
-                <Shield className="h-3.5 w-3.5 t-text-5 mt-0.5 flex-shrink-0" />
+                <Shield className="h-3.5 w-3 t-text-5 mt-0.5 flex-shrink-0" />
                 <p className="text-[10px] t-text-5 leading-relaxed">
-                  Credentials are stored locally in your browser only. API calls
-                  are made server-side. OTP login goes through your broker&apos;s secure login page.
+                  Credentials are stored locally in your browser only. API calls are made server-side.
+                  Generate your access token from your broker&apos;s developer portal (Dhan: web.dhan.co → My Profile → Access DhanHQ APIs).
                 </p>
               </div>
             </div>
