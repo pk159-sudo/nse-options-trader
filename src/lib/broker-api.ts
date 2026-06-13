@@ -391,30 +391,29 @@ function dhanHeaders(accessToken: string): HeadersInit {
 }
 
 export async function dhanProfile(accessToken: string): Promise<BrokerProfile> {
-  const res = await fetch(`${DHAN_BASE}/user/profile`, { headers: dhanHeaders(accessToken) });
+  const res = await fetch(`${DHAN_BASE}/v2/profile`, { headers: dhanHeaders(accessToken) });
   if (!res.ok) {
     const err = await safeJson<{ error_message?: string }>(res).catch(() => ({}));
     throw new Error(err.error_message || `Dhan profile failed (${res.status}). Check access token.`);
   }
-  const data = await safeJson<{ dhan_client_id?: string; name?: string; email?: string }>(res);
-  return { userId: data.dhan_client_id || "", name: data.name || "", email: data.email || "", broker: "DHAN" };
+  const data = await safeJson<{ dhanClientId?: string; name?: string; email?: string }>(res);
+  return { userId: data.dhanClientId || "", name: data.name || "", email: data.email || "", broker: "DHAN" };
 }
 
 export async function dhanBalance(accessToken: string): Promise<BrokerBalance> {
-  const res = await fetch(`${DHAN_BASE}/user/funds`, { headers: dhanHeaders(accessToken) });
+  const res = await fetch(`${DHAN_BASE}/v2/fundlimit`, { headers: dhanHeaders(accessToken) });
   if (!res.ok) throw new Error(`Dhan balance failed (${res.status}). Check access token.`);
-  const data = await safeJson<{ equity_amount?: { available_balance?: number; cash_balance?: number; margin_used?: number } }>(res);
-  const eq = data.equity_amount || {};
-  const balance = Number(eq.available_balance) || Number(eq.cash_balance) || 0;
-  const used = Number(eq.margin_used) || 0;
+  const data = await safeJson<{ availabelBalance?: number; sodLimit?: number; utilizedAmount?: number; withdrawableBalance?: number }>(res);
+  const balance = Number(data.availabelBalance) || Number(data.sodLimit) || 0;
+  const used = Number(data.utilizedAmount) || 0;
   return { balance, availableMargin: balance, usedMargin: used, currency: "INR" };
 }
 
 export async function dhanPositions(accessToken: string): Promise<BrokerPosition[]> {
-  const res = await fetch(`${DHAN_BASE}/positions`, { headers: dhanHeaders(accessToken) });
+  const res = await fetch(`${DHAN_BASE}/v2/positions`, { headers: dhanHeaders(accessToken) });
   if (!res.ok) throw new Error(`Dhan positions failed (${res.status})`);
-  const data = await safeJson<{ data?: Record<string, unknown>[] }>(res);
-  return (data.data || []).map((p) => {
+  const data = await safeJson<Record<string, unknown>[]>(res);
+  return (Array.isArray(data) ? data : []).map((p) => {
     const qty = Number(p.quantity) || 0; const avg = Number(p.average_price) || 0;
     const cur = Number(p.current_price) || Number(p.cmp) || 0;
     const pnl = Number(p.pnl) || Number(p.realized_pnl) || 0;

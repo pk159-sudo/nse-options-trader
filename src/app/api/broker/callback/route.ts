@@ -422,17 +422,17 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      // Fetch balance
+      // Fetch balance using correct Dhan v2 endpoint
       let balance = 0;
       try {
-        const fundRes = await fetch("https://api.dhan.co/v2/user/funds", {
-          headers: { "access-token": accessToken },
+        const fundRes = await fetch("https://api.dhan.co/v2/fundlimit", {
+          headers: { "access-token": accessToken, Accept: "application/json" },
         });
         if (fundRes.ok) {
           const fundText = await fundRes.text();
           if (!fundText.trimStart().startsWith("<")) {
-            const fundData = JSON.parse(fundText) as { equity_amount?: { available_balance?: number } };
-            balance = Number(fundData.equity_amount?.available_balance) || 0;
+            const fundData = JSON.parse(fundText) as { availabelBalance?: number; sodLimit?: number };
+            balance = Number(fundData.availabelBalance) || Number(fundData.sodLimit) || 0;
           }
         }
       } catch {
