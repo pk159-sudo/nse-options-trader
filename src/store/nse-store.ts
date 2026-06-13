@@ -895,6 +895,17 @@ function getDemoSignals(expiry: string): TradingSignal[] {
 
 function getDemoTrades(expiry: string): Trade[] {
   const now = new Date().toISOString();
+  // WIN: 24000 CE entry 85.50 → +50% target = 128.25
+  const winEntry = 85.50;
+  const winExit = winEntry * 1.50; // 128.25 — 50% target hit
+  const winPct = ((winExit - winEntry) / winEntry) * 100; // 50%
+  // LOSS: 24000 PE entry 120.00 → -15% stop loss = 102.00
+  const lossEntry = 120.00;
+  const lossExit = lossEntry * 0.85; // 102.00 — 15% SL hit
+  const lossPct = -15.0;
+  // OPEN: 23900 CE entry 142.30 — still running
+  const openEntry = 142.30;
+
   return [
     {
       id: "trade-demo-bull-1",
@@ -902,21 +913,21 @@ function getDemoTrades(expiry: string): Trade[] {
       createdAt: now,
       signalType: "BULLISH",
       strike: 24000,
-      entryPrice: 85.50,
-      exitPrice: 135.00,
-      pnl: (135.00 - 85.50) * 65,
+      entryPrice: winEntry,
+      exitPrice: winExit,
+      pnl: (winExit - winEntry) * 65,
       status: "CLOSED",
-      currentStop: 85.50 * 0.85,
-      highestProfitPct: ((135.00 - 85.50) / 85.50) * 100,
-      maxDrawdownPct: 3.2,
+      currentStop: winExit,
+      highestProfitPct: winPct,
+      maxDrawdownPct: 3.5,
       priceHistory: [
-        { time: "10:45:00", price: 85.50 },
+        { time: "10:45:00", price: winEntry },
         { time: "11:00:00", price: 92.00 },
         { time: "11:15:00", price: 88.50 },
         { time: "11:30:00", price: 105.00 },
         { time: "11:45:00", price: 118.00 },
-        { time: "12:00:00", price: 128.50 },
-        { time: "12:15:00", price: 135.00 },
+        { time: "12:00:00", price: 125.80 },
+        { time: "12:15:00", price: winExit },
       ],
       expiry,
       signalId: "sig-demo-bull-1",
@@ -929,21 +940,21 @@ function getDemoTrades(expiry: string): Trade[] {
       createdAt: new Date(Date.now() - 3600000).toISOString(),
       signalType: "BEARISH",
       strike: 24000,
-      entryPrice: 120.00,
-      exitPrice: 98.50,
-      pnl: (98.50 - 120.00) * 65,
+      entryPrice: lossEntry,
+      exitPrice: lossExit,
+      pnl: (lossExit - lossEntry) * 65,
       status: "CLOSED",
-      currentStop: 120.00 * 0.85,
+      currentStop: lossExit,
       highestProfitPct: 5.5,
-      maxDrawdownPct: 17.9,
+      maxDrawdownPct: Math.abs(lossPct),
       priceHistory: [
-        { time: "12:15:00", price: 120.00 },
-        { time: "12:30:00", price: 112.00 },
-        { time: "12:45:00", price: 108.50 },
-        { time: "13:00:00", price: 126.60 },
-        { time: "13:15:00", price: 115.00 },
-        { time: "13:30:00", price: 102.00 },
-        { time: "13:45:00", price: 98.50 },
+        { time: "12:15:00", price: lossEntry },
+        { time: "12:30:00", price: 115.00 },
+        { time: "12:45:00", price: 110.50 },
+        { time: "13:00:00", price: 107.00 },
+        { time: "13:15:00", price: 105.00 },
+        { time: "13:30:00", price: 103.50 },
+        { time: "13:45:00", price: lossExit },
       ],
       expiry,
       signalId: "sig-demo-bear-2",
@@ -956,14 +967,14 @@ function getDemoTrades(expiry: string): Trade[] {
       createdAt: now,
       signalType: "BULLISH",
       strike: 23900,
-      entryPrice: 142.30,
+      entryPrice: openEntry,
       exitPrice: 0,
       pnl: 0,
       status: "OPEN",
-      currentStop: 142.30 * 0.85,
+      currentStop: openEntry * 0.85, // SL at 120.96
       highestProfitPct: 0,
       maxDrawdownPct: 0,
-      priceHistory: [{ time: "14:02:00", price: 142.30 }],
+      priceHistory: [{ time: "14:02:00", price: openEntry }],
       expiry,
       signalId: "sig-demo-bull-3",
       isRealTrade: false,
