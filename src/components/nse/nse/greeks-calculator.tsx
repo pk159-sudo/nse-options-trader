@@ -61,7 +61,7 @@ function GreekBar({
 }
 
 export function GreeksCalculator() {
-  const { selectedSymbol, optionChain, selectedExpiry } = useNSEStore();
+  const { optionChain, selectedExpiry } = useNSEStore();
 
   const [spotPrice, setSpotPrice] = useState(optionChain?.spotPrice || 24500);
   const [strikePrice, setStrikePrice] = useState(optionChain?.atmStrike || 24500);

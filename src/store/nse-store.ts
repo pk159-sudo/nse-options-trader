@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type NSESymbol = "NIFTY" | "BANKNIFTY" | "FINNIFTY" | "NIFTYIT";
+// NIFTY only — multi-symbol support removed
 
 interface OptionStrikeData {
   strikePrice: number;
@@ -158,7 +158,7 @@ export interface BrokerAccount {
 
 export type TradeMode = "PAPER" | "SEMI_AUTO";
 
-const LOT_SIZES: Record<string, number> = { NIFTY: 65, BANKNIFTY: 15, FINNIFTY: 25, NIFTYIT: 10 };
+const LOT_SIZES: Record<string, number> = { NIFTY: 65 };
 const LOT_SIZE = 65;
 const PROFIT_TARGET_PCT = 50;
 const INITIAL_STOP_PCT = 15;
@@ -608,7 +608,7 @@ function checkExitConditions(
 }
 
 interface NSEStore {
-  selectedSymbol: NSESymbol;
+  // selectedSymbol removed — NIFTY only
   selectedExpiry: string;
   expiryDates: string[];
   optionChain: OptionChainState | null;
@@ -645,7 +645,7 @@ interface NSEStore {
   pendingSignals: TradingSignal[];
   brokerAccount: BrokerAccount | null;
 
-  setSymbol: (symbol: NSESymbol) => void;
+  // setSymbol removed — NIFTY only
   setExpiry: (expiry: string) => void;
   setAutoRefresh: (val: boolean) => void;
   setRefreshInterval: (seconds: number) => void;
@@ -776,7 +776,7 @@ function reconstructOptionChainFromSnapshot(
 async function loadFromDisk(): Promise<boolean> {
   try {
     const state = useNSEStore.getState();
-    if (!state.selectedSymbol || !state.selectedExpiry) return false;
+    if (!state.selectedExpiry) return false;
 
     // Load disk files (snapshots, signals, trades, delta)
     await Promise.all([
@@ -790,7 +790,7 @@ async function loadFromDisk(): Promise<boolean> {
     const updated = useNSEStore.getState();
     if (updated.snapshots.length > 0) {
       const latestSnapshot = updated.snapshots[updated.snapshots.length - 1];
-      const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, updated.selectedSymbol);
+      const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, "NIFTY");
       useNSEStore.setState({
         optionChain: reconstructed,
         lastUpdated: new Date(latestSnapshot.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
@@ -830,7 +830,7 @@ function checkIfMarketOpen(): boolean {
 export const useNSEStore = create<NSEStore>()(
   persist(
     (set, get) => ({
-  selectedSymbol: "NIFTY",
+  // NIFTY only (selectedSymbol removed)
   selectedExpiry: "",
   expiryDates: [],
   optionChain: null,
@@ -866,10 +866,8 @@ export const useNSEStore = create<NSEStore>()(
     set({ isMarketOpen: checkIfMarketOpen() });
   },
 
-  setSymbol: (symbol) => {
-    set({ selectedSymbol: symbol, selectedExpiry: "", optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
-    get().fetchExpiryDates();
-  },
+  // setSymbol removed — NIFTY only
+
 
   setExpiry: async (expiry) => {
     // On expiry change, clear only session data (not trades from other expiries if any)
@@ -888,7 +886,7 @@ export const useNSEStore = create<NSEStore>()(
   fetchExpiryDates: async () => {
     set({ isExpiryLoading: true, error: null });
     try {
-      const res = await fetch(`/api/nse/expiry?symbol=${get().selectedSymbol}`);
+      const res = await fetch(`/api/nse/expiry?symbol=NIFTY`);
       const resData = await res.json();
       if (!resData?.expiryDates?.length) throw new Error("Failed to fetch expiry dates from NSE");
       const expiryDates = resData.expiryDates || [];
@@ -905,7 +903,7 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   fetchOptionChain: async (forceRefresh = false) => {
-    const { selectedSymbol, selectedExpiry, snapshots, oiThreshold, trades } = get();
+    const { selectedExpiry, snapshots, oiThreshold, trades } = get();
     if (!selectedExpiry) return;
 
     // ===== OFF-MARKET GATE =====
@@ -923,7 +921,7 @@ export const useNSEStore = create<NSEStore>()(
     set({ isLoading: true, error: null });
     try {
       const params = new URLSearchParams({
-        symbol: selectedSymbol,
+        symbol: "NIFTY",
         expiry: selectedExpiry,
       });
 
@@ -1131,14 +1129,14 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveDeltaToFile: async (prevTimestamp: string) => {
-    const { selectedSymbol, selectedExpiry, snapshotDelta, spotPrice } = get();
-    if (!selectedSymbol || !selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
+    const { selectedExpiry, snapshotDelta, spotPrice } = get();
+    if (!selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
     try {
       await fetch("/api/nse/delta-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          symbol: selectedSymbol,
+          symbol: "NIFTY",
           expiry: selectedExpiry,
           timestamp: new Date().toISOString(),
           spotPrice,
@@ -1152,11 +1150,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadDeltaFromFile: async () => {
-    const { selectedSymbol, selectedExpiry } = get();
-    if (!selectedSymbol || !selectedExpiry) return;
+    const { selectedExpiry } = get();
+    if (!selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/delta-history?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}`
+        `/api/nse/delta-history?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1172,14 +1170,13 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveSnapshotToCsv: async (snapshot) => {
-    const { selectedSymbol } = get();
-    if (!selectedSymbol || !snapshot.expiry) return null;
+    if (!snapshot.expiry) return null;
     try {
       const resp = await fetch("/api/nse/snapshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          symbol: selectedSymbol,
+          symbol: "NIFTY",
           expiry: snapshot.expiry,
           timestamp: snapshot.timestamp,
           spotPrice: snapshot.spotPrice,
@@ -1195,11 +1192,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadSnapshotHistory: async () => {
-    const { selectedSymbol, selectedExpiry } = get();
-    if (!selectedSymbol || !selectedExpiry) return;
+    const { selectedExpiry } = get();
+    if (!selectedExpiry) return;
     try {
       const response = await fetch(
-          `/api/nse/snapshots?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}`
+          `/api/nse/snapshots?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
         );
       if (!response.ok) return;
       const data = await response.json();
@@ -1212,11 +1209,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveSignalToFile: async (signal) => {
-    const { selectedSymbol, selectedExpiry } = get();
+    const { selectedExpiry } = get();
     const expiry = signal.expiry || selectedExpiry;
-    if (!selectedSymbol || !expiry) return;
+    if (!expiry) return;
     try {
-      await fetch(`/api/nse/signals?symbol=${selectedSymbol}&expiry=${encodeURIComponent(expiry)}`, {
+      await fetch(`/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(signal),
@@ -1227,11 +1224,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadSignalsFromFile: async () => {
-    const { selectedSymbol, selectedExpiry } = get();
-    if (!selectedSymbol || !selectedExpiry) return;
+    const { selectedExpiry } = get();
+    if (!selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/signals?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}&limit=10`
+        `/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limit=10`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1244,11 +1241,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveTradeToFile: async (trade) => {
-    const { selectedSymbol, selectedExpiry } = get();
+    const { selectedExpiry } = get();
     const expiry = trade.expiry || selectedExpiry;
-    if (!selectedSymbol || !expiry) return;
+    if (!expiry) return;
     try {
-      await fetch(`/api/nse/trades?symbol=${selectedSymbol}&expiry=${encodeURIComponent(expiry)}`, {
+      await fetch(`/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(trade),
@@ -1259,11 +1256,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadTradesFromFile: async () => {
-    const { selectedSymbol, selectedExpiry } = get();
-    if (!selectedSymbol || !selectedExpiry) return;
+    const { selectedExpiry } = get();
+    if (!selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/trades?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}&limitClosed=5`
+        `/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limitClosed=5`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1331,7 +1328,7 @@ export const useNSEStore = create<NSEStore>()(
     // If broker is connected, place real order via API
     if (isBrokerConnected && state.brokerAccount) {
       const acc = state.brokerAccount;
-      const symbol = state.selectedSymbol || "NIFTY";
+      const symbol = "NIFTY";
       fetch("/api/broker/place-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1412,7 +1409,7 @@ export const useNSEStore = create<NSEStore>()(
   name: "nse-options-store",
   // Save only core data to localStorage; snapshots, signals, and trades are stored on the server
   partialize: (state) => ({
-    selectedSymbol: state.selectedSymbol,
+    // selectedSymbol removed from persist — NIFTY only
     selectedExpiry: state.selectedExpiry,
     autoRefresh: state.autoRefresh,
     refreshInterval: state.refreshInterval,

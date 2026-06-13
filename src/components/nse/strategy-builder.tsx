@@ -27,19 +27,8 @@ import { useNSEStore } from "@/store/nse-store";
 import { formatPrice, formatIndianNumber } from "@/lib/nse";
 import { Brain, TrendingUp, TrendingDown, Minus, AlertTriangle, Info } from "lucide-react";
 
-const LOT_SIZES: Record<string, number> = {
-  NIFTY: 65,
-  BANKNIFTY: 15,
-  FINNIFTY: 25,
-  NIFTYIT: 25,
-};
-
-const STRIKE_STEP: Record<string, number> = {
-  NIFTY: 50,
-  BANKNIFTY: 100,
-  FINNIFTY: 50,
-  NIFTYIT: 50,
-};
+const LOT_SIZE = 65;
+const STRIKE_STEP = 50;
 
 function MarketViewBadge({ view }: { view: string }) {
   const config: Record<string, { icon: React.ElementType; label: string; className: string }> = {
@@ -70,11 +59,11 @@ function RiskBadge({ level }: { level: string }) {
 }
 
 export function StrategyBuilder() {
-  const { selectedSymbol, optionChain } = useNSEStore();
+  const { optionChain } = useNSEStore();
   const spotPrice = optionChain?.spotPrice || 24500;
   const atmStrike = optionChain?.atmStrike || 24500;
-  const lotSize = LOT_SIZES[selectedSymbol] || 25;
-  const strikeStep = STRIKE_STEP[selectedSymbol] || 50;
+  const lotSize = LOT_SIZE;
+  const strikeStep = STRIKE_STEP;
 
   const [selectedStrategyId, setSelectedStrategyId] = useState("long-straddle");
   const [quantity, setQuantity] = useState(1);

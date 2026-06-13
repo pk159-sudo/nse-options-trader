@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchOptionChainV3, calculatePCR, calculateMaxPain, getATMStrike, daysToExpiry } from "@/lib/nse";
-import type { NSESymbol } from "@/lib/nse";
 
 // Server-side cache for stale-while-revalidate pattern
 let cachedData: Record<string, { data: unknown; timestamp: number }> = {};
@@ -9,7 +8,7 @@ const CACHE_TTL = 45 * 1000; // 45 seconds cache
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const symbol = (searchParams.get("symbol") || "NIFTY") as NSESymbol;
+    const symbol = searchParams.get("symbol") || "NIFTY";
     const expiry = searchParams.get("expiry") || undefined;
     const cacheKey = `${symbol}-${expiry || "current"}`;
 

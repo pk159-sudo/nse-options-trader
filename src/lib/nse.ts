@@ -187,11 +187,11 @@ export interface OptionChainV3Response {
   };
 }
 
-export type NSESymbol = "NIFTY" | "BANKNIFTY" | "FINNIFTY" | "NIFTYIT";
+// NIFTY only — multi-symbol support removed
 
 // Fetch available expiry dates using contract-info endpoint
 export async function fetchExpiryDates(
-  symbol: NSESymbol
+  symbol: string
 ): Promise<string[] | null> {
   const url = `${CONTRACT_INFO_URL}${symbol}`;
   const data = await fetchNSE<ContractInfoResponse>(url);
@@ -200,7 +200,7 @@ export async function fetchExpiryDates(
 
 // Fetch option chain data using option-chain-v3 endpoint
 export async function fetchOptionChainV3(
-  symbol: NSESymbol,
+  symbol: string,
   expiryDate?: string
 ): Promise<OptionChainV3Response | null> {
   let url = `${OC_V3_URL}${symbol}`;
