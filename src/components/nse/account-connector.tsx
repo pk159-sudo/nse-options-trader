@@ -186,12 +186,24 @@ export function AccountConnector() {
   const [showSecrets, setShowSecrets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
-  const [authMode, setAuthMode] = useState<"otp" | "manual">("otp"); // OTP login (default) or manual token
+  const [authMode, setAuthMode] = useState<"otp" | "manual">("otp");
+  const [hasSavedCredentials, setHasSavedCredentials] = useState(false); // OTP login (default) or manual token
 
   const isConnected = brokerAccount?.status === "CONNECTED";
   const brokerInfo = brokerAccount
     ? BROKER_INFO[brokerAccount.broker]
     : BROKER_INFO[selectedBroker];
+
+  // Auto-fill API key + secret from last saved connection (persisted in localStorage)
+  useEffect(() => {
+    if (isConnected) return; // Don't overwrite when connected
+    if (brokerAccount?.apiKey) {
+      setSelectedBroker(brokerAccount.broker);
+      setApiKey(brokerAccount.apiKey);
+      setApiSecret(brokerAccount.apiSecret);
+      setHasSavedCredentials(true);
+    }
+  }, [isConnected]); // Only run once on mount or when connection status changes
 
   useEffect(() => {
     if (!isConnected || !brokerAccount) return;
@@ -387,8 +399,8 @@ export function AccountConnector() {
       );
     }
     disconnectBroker();
-    setApiKey("");
-    setApiSecret("");
+    // Keep apiKey + apiSecret in inputs — they're saved in brokerAccount (localStorage)
+    // User only needs to paste a new access token next time
   };
 
   const addActivity = (
@@ -603,6 +615,16 @@ export function AccountConnector() {
                       </Button>
                     </div>
                   </div>
+
+                  {hasSavedCredentials && !isConnected && (
+                    <div className="p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-start gap-2">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
+                      <div className="text-[10px] text-emerald-400/80">
+                        <span className="font-bold">Saved credentials found</span> — API Key & Secret auto-filled from last session. 
+                        Just paste your new access token below.
+                      </div>
+                    </div>
+                  )}
 
                   {authMode === "otp" && (
                     <div className="p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
