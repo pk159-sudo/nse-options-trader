@@ -357,26 +357,38 @@ export async function GET(request: NextRequest) {
     }
 
     // ──────────────────────────────────────────────────────
-    //  DHAN v2 — Consent-based OAuth (NOT standard OAuth2)
-    //  Dhan redirects with consentId after user login + 2FA
-    //  We need to consume the consent to get access_token
+    //  DHAN v2 — Consent-based OAuth (3-step flow)
+    //  Step 1 (auth route): POST generate-consent → consentId
+    //  Step 2: Browser → consent-login → user logs in + 2FA
+    //         Dhan redirects back with tokenId (NOT consentId)
+    //  Step 3: POST consumeApp-consent with tokenId → access_token
     // ──────────────────────────────────────────────────────
-    if (brokerFromState === "DHAN" || searchParams.get("consentId")) {
+    if (brokerFromState === "DHAN" || searchParams.get("tokenId")) {
+      // We need apiKey + apiSecret to consume consent, so read cookie BEFORE clearing
+      const dhanApiKey = apiKey;
+      const dhanApiSecret = apiSecret;
+
       clearAuthCookie(response);
 
-      const consentId = searchParams.get("consentId");
-      if (!consentId || !apiKey) {
+      const tokenId = searchParams.get("tokenId");
+      if (!tokenId || !dhanApiKey || !dhanApiSecret) {
         return redirectWithError(
           response,
-          "Missing consentId or API key from Dhan. Make sure redirect URL is set correctly in Dhan developer portal."
+          "Missing tokenId, API Key, or API Secret from Dhan. Check that your Dhan app has the correct redirect URL configured."
         );
       }
 
-      // Consume consent → get access_token
-      const consentUrl = `https://auth.dhan.co/app/consumeApp-consent?tokenId=${consentId}`;
-      const res = await fetch(consentUrl, {
-        method: "GET",
-        headers: { Accept: "application/json" },
+      // Step 3: Consume consent → exchange tokenId for access_token
+      // Requires client_id + app_secret in headers (same as generate-consent)
+      const consumeUrl = `https://auth.dhan.co/app/consumeApp-consent?tokenId=${tokenId}`;
+      const res = await fetch(consumeUrl, {
+        method: "POST",
+        headers: {
+          "client_id": dhanApiKey,
+          "app_secret": dhanApiSecret,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
       });
 
       if (!res.ok) {
@@ -390,7 +402,8 @@ export async function GET(request: NextRequest) {
       let accessToken = "";
       let data: Record<string, unknown>;
       try {
-        data = JSON.parse(await res.text()) as Record<string, unknown>;
+        const resText = await res.text();
+        data = JSON.parse(resText) as Record<string, unknown>;
         // Dhan returns access_token in the response
         accessToken = String(data.access_token || data.accessToken || "");
       } catch {
@@ -400,7 +413,7 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const userId = apiKey;
+      const userId = dhanApiKey;
 
       if (!accessToken) {
         return redirectWithError(
@@ -416,8 +429,11 @@ export async function GET(request: NextRequest) {
           headers: { "access-token": accessToken },
         });
         if (fundRes.ok) {
-          const fundData = await safeJson<{ equity_amount?: { available_balance?: number } }>(fundRes);
-          balance = Number(fundData.equity_amount?.available_balance) || 0;
+          const fundText = await fundRes.text();
+          if (!fundText.trimStart().startsWith("<")) {
+            const fundData = JSON.parse(fundText) as { equity_amount?: { available_balance?: number } };
+            balance = Number(fundData.equity_amount?.available_balance) || 0;
+          }
         }
       } catch {
         // Balance fetch failed

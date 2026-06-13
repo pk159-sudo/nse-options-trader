@@ -47,10 +47,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // apiSecret is required for Zerodha and Angel One only
-    if ((broker === "ZERODHA" || broker === "ANGEL_ONE") && !apiSecret) {
+    // apiSecret is required for Zerodha, Angel One, and Dhan
+    if ((broker === "ZERODHA" || broker === "ANGEL_ONE" || broker === "DHAN") && !apiSecret) {
+      const label = broker === "ZERODHA" ? "Zerodha requires API Secret" : broker === "ANGEL_ONE" ? "Angel One requires Client Code" : "Dhan requires API Secret (app_secret)";
       return NextResponse.json(
-        { error: `${broker === "ZERODHA" ? "Zerodha requires API Secret" : "Angel One requires Client Code"} for token exchange` },
+        { error: `${label} for token exchange` },
         { status: 400 }
       );
     }
@@ -94,13 +95,51 @@ export async function POST(request: NextRequest) {
         break;
       }
 
-      // ── Dhan ──
-      // Dhan uses consent-based OAuth (NOT standard OAuth2 code flow)
-      // Step 1: Redirect to Dhan consent page → user logs in + 2FA
-      // Step 2: Dhan redirects back with consentId
-      // Step 3: We exchange consentId for access_token
+      // ── DHAN (Consent-based OAuth — 3 steps) ──
+      // Step 1: Server calls generate-consent with client_id + app_secret → gets consentId
+      // Step 2: Browser redirects to consent-login?consentId=... → user logs in + 2FA
+      //         Dhan redirects back to our callback with tokenId
+      // Step 3: Callback exchanges tokenId for access_token
       case "DHAN": {
-        loginURL = `https://auth.dhan.co/app/generate-consent?client_id=${apiKey}`;
+        // Generate consent server-side (requires API key + secret in headers)
+        const consentRes = await fetch("https://auth.dhan.co/app/generate-consent", {
+          method: "POST",
+          headers: {
+            "client_id": apiKey,
+            "app_secret": apiSecret,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!consentRes.ok) {
+          const errText = await consentRes.text().catch(() => "");
+          return NextResponse.json(
+            { error: `Dhan consent generation failed (${consentRes.status}). ${errText.substring(0, 200)}. Check your API Key and Secret.` },
+            { status: consentRes.status }
+          );
+        }
+
+        let consentData: Record<string, unknown>;
+        try {
+          consentData = await consentRes.json() as Record<string, unknown>;
+        } catch {
+          return NextResponse.json(
+            { error: "Invalid response from Dhan consent API. Check your credentials." },
+            { status: 502 }
+          );
+        }
+
+        const consentId = String(consentData.consentId || consentData.consent_id || "");
+        if (!consentId) {
+          return NextResponse.json(
+            { error: `Dhan did not return a consentId. Response: ${JSON.stringify(consentData).substring(0, 200)}` },
+            { status: 502 }
+          );
+        }
+
+        // Step 2: Redirect browser to Dhan login page
+        // Dhan will redirect back to our callback URL with tokenId
+        loginURL = `https://auth.dhan.co/consent-login?consentId=${consentId}`;
         break;
       }
 

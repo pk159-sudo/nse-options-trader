@@ -27,9 +27,28 @@ export async function POST(request: NextRequest) {
     const { broker, apiKey, apiSecret, accessToken } = body;
 
     // Validate required fields
-    if (!broker || !apiKey || !apiSecret || !accessToken) {
+    if (!broker || !accessToken) {
       return NextResponse.json(
-        { error: "Missing required fields: broker, apiKey, apiSecret, accessToken" },
+        { error: "Missing required fields: broker, accessToken" },
+        { status: 400 }
+      );
+    }
+
+    // apiKey is required for Zerodha (sent in auth header), Upstox (client_id), Angel One (source ID)
+    // Dhan only needs accessToken for API calls, but apiKey is needed for OAuth
+    if (!apiKey && broker !== "DHAN" && broker !== "GROWW") {
+      return NextResponse.json(
+        { error: "Missing required field: apiKey" },
+        { status: 400 }
+      );
+    }
+
+    // apiSecret is required for Zerodha (checksum), Angel One (client code), and Dhan (app_secret for OAuth)
+    // But for manual token connect, Dhan + Upstox can work without it
+    const needsSecret = broker === "ZERODHA" || broker === "ANGEL_ONE";
+    if (needsSecret && !apiSecret) {
+      return NextResponse.json(
+        { error: `${broker === "ZERODHA" ? "Zerodha" : "Angel One"} requires API Secret / Client Code` },
         { status: 400 }
       );
     }
