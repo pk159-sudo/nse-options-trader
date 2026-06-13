@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-// NIFTY only — multi-symbol support removed
+export type NSESymbol = "NIFTY" | "BANKNIFTY" | "FINNIFTY" | "NIFTYIT";
 
 interface OptionStrikeData {
   strikePrice: number;
@@ -103,7 +103,6 @@ export interface OISummaryData {
 export interface TradingSignal {
   id: string;
   time: string;
-  createdAt: string;
   fromStrike: number;
   toStrike: number;
   type: "BULLISH" | "BEARISH";
@@ -125,7 +124,6 @@ export interface TradingSignal {
 export interface Trade {
   id: string;
   time: string;
-  createdAt: string;
   signalType: "BULLISH" | "BEARISH";
   strike: number;
   entryPrice: number;
@@ -160,7 +158,6 @@ export interface BrokerAccount {
 
 export type TradeMode = "PAPER" | "SEMI_AUTO";
 
-const LOT_SIZES: Record<string, number> = { NIFTY: 65 };
 const LOT_SIZE = 65;
 const PROFIT_TARGET_PCT = 50;
 const INITIAL_STOP_PCT = 15;
@@ -472,7 +469,6 @@ function scanSignalsFallback(
     signals.push({
       id: `sig-${Date.now()}-fbear`,
       time: now,
-      createdAt: new Date().toISOString(),
       fromStrike: ceStrike,
       toStrike: putBuyStrike,
       type: "BEARISH",
@@ -496,7 +492,6 @@ function scanSignalsFallback(
     signals.push({
       id: `sig-${Date.now()}-fbull`,
       time: now,
-      createdAt: new Date().toISOString(),
       fromStrike: peStrike,
       toStrike: callBuyStrike,
       type: "BULLISH",
@@ -612,7 +607,7 @@ function checkExitConditions(
 }
 
 interface NSEStore {
-  // selectedSymbol removed — NIFTY only
+  selectedSymbol: NSESymbol;
   selectedExpiry: string;
   expiryDates: string[];
   optionChain: OptionChainState | null;
@@ -649,7 +644,7 @@ interface NSEStore {
   pendingSignals: TradingSignal[];
   brokerAccount: BrokerAccount | null;
 
-  // setSymbol removed — NIFTY only
+  setSymbol: (symbol: NSESymbol) => void;
   setExpiry: (expiry: string) => void;
   setAutoRefresh: (val: boolean) => void;
   setRefreshInterval: (seconds: number) => void;
@@ -671,8 +666,6 @@ interface NSEStore {
   setTradeMode: (mode: TradeMode) => void;
   approveSignal: (signalId: string) => void;
   rejectSignal: (signalId: string) => void;
-  closeTrade: (tradeId: string) => void;
-  closeAllTrades: () => void;
   connectBroker: (account: BrokerAccount) => void;
   disconnectBroker: () => void;
   updateBrokerBalance: (balance: number) => void;
@@ -782,7 +775,7 @@ function reconstructOptionChainFromSnapshot(
 async function loadFromDisk(): Promise<boolean> {
   try {
     const state = useNSEStore.getState();
-    if (!state.selectedExpiry) return false;
+    if (!state.selectedSymbol || !state.selectedExpiry) return false;
 
     // Load disk files (snapshots, signals, trades, delta)
     await Promise.all([
@@ -796,7 +789,7 @@ async function loadFromDisk(): Promise<boolean> {
     const updated = useNSEStore.getState();
     if (updated.snapshots.length > 0) {
       const latestSnapshot = updated.snapshots[updated.snapshots.length - 1];
-      const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, "NIFTY");
+      const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, updated.selectedSymbol);
       useNSEStore.setState({
         optionChain: reconstructed,
         lastUpdated: new Date(latestSnapshot.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
@@ -836,7 +829,7 @@ function checkIfMarketOpen(): boolean {
 export const useNSEStore = create<NSEStore>()(
   persist(
     (set, get) => ({
-  // NIFTY only (selectedSymbol removed)
+  selectedSymbol: "NIFTY",
   selectedExpiry: "",
   expiryDates: [],
   optionChain: null,
@@ -872,20 +865,18 @@ export const useNSEStore = create<NSEStore>()(
     set({ isMarketOpen: checkIfMarketOpen() });
   },
 
-  // setSymbol removed — NIFTY only
-
+  setSymbol: (symbol) => {
+    set({ selectedSymbol: symbol, selectedExpiry: "", optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
+    get().fetchExpiryDates();
+  },
 
   setExpiry: async (expiry) => {
     // On expiry change, clear only session data (not trades from other expiries if any)
     set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
     if (expiry) {
-      // Load from disk first. If no data found, allow one NSE fetch
-      // to download the latest closing data for this expiry week.
-      const loaded = await loadFromDisk();
-      if (!loaded) {
-        // No disk data for this expiry — trigger one fetch
-        await get().fetchOptionChain();
-      }
+      // Load from disk ONLY — no NSE fetch on expiry switch.
+      // Data will refresh only on manual refresh or countdown during live market.
+      await loadFromDisk();
     }
   },
 
@@ -896,19 +887,16 @@ export const useNSEStore = create<NSEStore>()(
   fetchExpiryDates: async () => {
     set({ isExpiryLoading: true, error: null });
     try {
-      const res = await fetch(`/api/nse/expiry?symbol=NIFTY`);
+      const res = await fetch(`/api/nse/expiry?symbol=${get().selectedSymbol}`);
       const resData = await res.json();
       if (!resData?.expiryDates?.length) throw new Error("Failed to fetch expiry dates from NSE");
       const expiryDates = resData.expiryDates || [];
       set({ expiryDates, isExpiryLoading: false });
       if (expiryDates.length > 0 && !get().selectedExpiry) {
         set({ selectedExpiry: expiryDates[0] });
-        // Load from disk. If no data found, trigger one NSE fetch
-        // so user sees latest data even when opening off-market.
-        const loaded = await loadFromDisk();
-        if (!loaded) {
-          void get().fetchOptionChain();
-        }
+        // Load from disk — don't fetch from NSE on symbol/initial load.
+        // Fetch only triggers on manual refresh or countdown during live market.
+        void loadFromDisk();
       }
     } catch (err: unknown) {
       set({ error: (err as Error).message, isExpiryLoading: false });
@@ -916,29 +904,25 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   fetchOptionChain: async (forceRefresh = false) => {
-    const { selectedExpiry, snapshots, oiThreshold, trades } = get();
+    const { selectedSymbol, selectedExpiry, snapshots, oiThreshold, trades } = get();
     if (!selectedExpiry) return;
 
     // ===== OFF-MARKET GATE =====
     // Don't fetch from NSE or save snapshots when market is closed.
     // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
-    //
-    // EXCEPTION: If no data exists for current expiry (no snapshots on disk
-    // and no optionChain in state), allow ONE fetch from NSE so the user
-    // sees the latest closing data instead of an empty screen.
-    // This also handles: new expiry week, first-time app open, data wiped.
+    // Data already available from:
+    //   1. Zustand persist (optionChain in localStorage from last session)
+    //   2. Disk files (snapshots, signals, trades, delta loaded at expiry change)
+    // This prevents junk snapshots corrupting delta history when app opens off-market.
     if (!checkIfMarketOpen()) {
-      const { optionChain, snapshots } = get();
-      const hasData = optionChain?.chainData?.length > 0 || snapshots.length > 0;
-      if (hasData) return; // Data exists — show cached, no NSE hit
-      // No data for this expiry — allow one fetch to get closing data
+      return;
     }
 
     // ===== LIVE MARKET: Full flow (fetch + save + calc + scan + exit check) =====
     set({ isLoading: true, error: null });
     try {
       const params = new URLSearchParams({
-        symbol: "NIFTY",
+        symbol: selectedSymbol,
         expiry: selectedExpiry,
       });
 
@@ -1146,14 +1130,14 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveDeltaToFile: async (prevTimestamp: string) => {
-    const { selectedExpiry, snapshotDelta, spotPrice } = get();
-    if (!selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
+    const { selectedSymbol, selectedExpiry, snapshotDelta, spotPrice } = get();
+    if (!selectedSymbol || !selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
     try {
       await fetch("/api/nse/delta-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          symbol: "NIFTY",
+          symbol: selectedSymbol,
           expiry: selectedExpiry,
           timestamp: new Date().toISOString(),
           spotPrice,
@@ -1167,11 +1151,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadDeltaFromFile: async () => {
-    const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
+    const { selectedSymbol, selectedExpiry } = get();
+    if (!selectedSymbol || !selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/delta-history?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
+        `/api/nse/delta-history?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1187,13 +1171,14 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveSnapshotToCsv: async (snapshot) => {
-    if (!snapshot.expiry) return null;
+    const { selectedSymbol } = get();
+    if (!selectedSymbol || !snapshot.expiry) return null;
     try {
       const resp = await fetch("/api/nse/snapshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          symbol: "NIFTY",
+          symbol: selectedSymbol,
           expiry: snapshot.expiry,
           timestamp: snapshot.timestamp,
           spotPrice: snapshot.spotPrice,
@@ -1209,11 +1194,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadSnapshotHistory: async () => {
-    const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
+    const { selectedSymbol, selectedExpiry } = get();
+    if (!selectedSymbol || !selectedExpiry) return;
     try {
       const response = await fetch(
-          `/api/nse/snapshots?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
+          `/api/nse/snapshots?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}`
         );
       if (!response.ok) return;
       const data = await response.json();
@@ -1226,11 +1211,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveSignalToFile: async (signal) => {
-    const { selectedExpiry } = get();
+    const { selectedSymbol, selectedExpiry } = get();
     const expiry = signal.expiry || selectedExpiry;
-    if (!expiry) return;
+    if (!selectedSymbol || !expiry) return;
     try {
-      await fetch(`/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
+      await fetch(`/api/nse/signals?symbol=${selectedSymbol}&expiry=${encodeURIComponent(expiry)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(signal),
@@ -1241,20 +1226,16 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadSignalsFromFile: async () => {
-    const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
+    const { selectedSymbol, selectedExpiry } = get();
+    if (!selectedSymbol || !selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limit=10`
+        `/api/nse/signals?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}&limit=10`
       );
       if (!response.ok) return;
       const data = await response.json();
       if (Array.isArray(data?.signals)) {
-        const normalized = data.signals.map((s: Record<string, unknown>) => ({
-          createdAt: s.createdAt || new Date().toISOString(),
-          ...s,
-        }));
-        set({ signals: normalized });
+        set({ signals: data.signals });
       }
     } catch {
       // Ignore read failures
@@ -1262,11 +1243,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   saveTradeToFile: async (trade) => {
-    const { selectedExpiry } = get();
+    const { selectedSymbol, selectedExpiry } = get();
     const expiry = trade.expiry || selectedExpiry;
-    if (!expiry) return;
+    if (!selectedSymbol || !expiry) return;
     try {
-      await fetch(`/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
+      await fetch(`/api/nse/trades?symbol=${selectedSymbol}&expiry=${encodeURIComponent(expiry)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(trade),
@@ -1277,11 +1258,11 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadTradesFromFile: async () => {
-    const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
+    const { selectedSymbol, selectedExpiry } = get();
+    if (!selectedSymbol || !selectedExpiry) return;
     try {
       const response = await fetch(
-        `/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limitClosed=5`
+        `/api/nse/trades?symbol=${selectedSymbol}&expiry=${encodeURIComponent(selectedExpiry)}&limitClosed=5`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1289,7 +1270,6 @@ export const useNSEStore = create<NSEStore>()(
         const expiry = selectedExpiry;
         const normalizedTrades = [...data.openTrades, ...data.closedTrades].map((trade) => ({
           expiry: expiry || trade.expiry || "",
-          createdAt: trade.createdAt || new Date().toISOString(),
           ...trade,
         }));
         set({ trades: normalizedTrades });
@@ -1309,7 +1289,7 @@ export const useNSEStore = create<NSEStore>()(
 
     const isBrokerConnected = state.brokerAccount?.status === "CONNECTED" && state.brokerAccount.broker !== "GROWW";
 
-    // Update signal status to APPROVED immediately
+    // Update signal status
     const updatedSignals = state.signals.map((s) =>
       s.id === signalId
         ? { ...s, status: "APPROVED" as const, executed: true, isRealTrade: isBrokerConnected }
@@ -1323,7 +1303,6 @@ export const useNSEStore = create<NSEStore>()(
     const trade: Trade = {
       id: `trade-${Date.now()}-${signal.toStrike}`,
       time: signal.time,
-      createdAt: new Date().toISOString(),
       signalType: signal.type,
       strike: signal.toStrike,
       entryPrice: signal.entryPrice,
@@ -1340,61 +1319,18 @@ export const useNSEStore = create<NSEStore>()(
       brokerName: isBrokerConnected ? state.brokerAccount?.broker : undefined,
     };
 
+    // Update the signal with trade reference and set status to EXECUTED
+    const finalSignals = updatedSignals.map((s) =>
+      s.id === signalId ? { ...s, tradeId: trade.id, status: "EXECUTED" as const } : s
+    );
+
     set({
-      signals: updatedSignals,
+      signals: finalSignals,
       pendingSignals: updatedPending,
       trades: [...state.trades, trade],
     });
-    void get().saveSignalToFile(updatedSignals.find((s) => s.id === signalId) ?? signal);
+    void get().saveSignalToFile(finalSignals.find((s) => s.id === signalId) ?? signal);
     void get().saveTradeToFile(trade);
-
-    // If broker is connected, place real order via API
-    if (isBrokerConnected && state.brokerAccount) {
-      const acc = state.brokerAccount;
-      const symbol = "NIFTY";
-      fetch("/api/broker/place-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          broker: acc.broker,
-          accessToken: acc.accessToken,
-          apiKey: acc.apiKey,
-          apiSecret: acc.apiSecret,
-          symbol,
-          strikePrice: signal.toStrike,
-          optionType: signal.type.includes("CALL") ? "CE" : "PE",
-          transactionType: "BUY",
-          quantity: LOT_SIZES[symbol] || LOT_SIZE,
-          price: signal.entryPrice,
-          orderType: "MARKET",
-          product: "MIS",
-        }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success && data.orderId) {
-            // Update the trade with real broker order ID
-            const { trades: currentTrades } = get();
-            const updatedTrades = currentTrades.map((t) =>
-              t.id === trade.id
-                ? { ...t, brokerOrderId: data.orderId }
-                : t
-            );
-            // Mark signal as EXECUTED with order ID
-            const { signals: currentSignals } = get();
-            const finalSignals = currentSignals.map((s) =>
-              s.id === signalId ? { ...s, tradeId: trade.id, status: "EXECUTED" as const, brokerOrderId: data.orderId } : s
-            );
-            set({ trades: updatedTrades, signals: finalSignals });
-            console.log(`Real order placed: ${data.orderId} — ${data.message}`);
-          } else {
-            console.error(`Order placement failed: ${data.error}`);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to place real order:", err);
-        });
-    }
   },
 
   rejectSignal: (signalId) => {
@@ -1407,92 +1343,6 @@ export const useNSEStore = create<NSEStore>()(
     const rejected = updatedSignals.find((s) => s.id === signalId);
     if (rejected) {
       void get().saveSignalToFile(rejected);
-    }
-  },
-
-  closeTrade: (tradeId) => {
-    const state = get();
-    const trade = state.trades.find((t) => t.id === tradeId);
-    if (!trade || trade.status !== "OPEN") return;
-
-    // Get current LTP from option chain for exit price
-    const chainData = state.optionChain?.chainData;
-    let exitPrice = trade.entryPrice; // fallback to entry if no LTP available
-    if (chainData && Array.isArray(chainData)) {
-      for (const rawItem of chainData) {
-        const item = rawItem as unknown as { strikePrice?: number; CE?: { lastPrice?: number }; PE?: { lastPrice?: number } };
-        if (item.strikePrice === trade.strike) {
-          exitPrice = trade.signalType === "BULLISH"
-            ? (item.CE?.lastPrice || trade.entryPrice)
-            : (item.PE?.lastPrice || trade.entryPrice);
-          break;
-        }
-      }
-    }
-
-    const pnl = (exitPrice - trade.entryPrice) * LOT_SIZE;
-    const profitPct = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-
-    const updatedTrade: Trade = {
-      ...trade,
-      status: "CLOSED",
-      exitPrice,
-      pnl,
-      highestProfitPct: Math.max(trade.highestProfitPct, profitPct > 0 ? profitPct : 0),
-      priceHistory: [...trade.priceHistory, { time: timeStr, price: exitPrice }],
-    };
-
-    const updatedTrades = state.trades.map((t) =>
-      t.id === tradeId ? updatedTrade : t
-    );
-    set({ trades: updatedTrades });
-    void get().saveTradeToFile(updatedTrade);
-
-    // If real trade with broker, place exit order (SELL)
-    if (trade.isRealTrade && trade.brokerName && state.brokerAccount) {
-      const acc = state.brokerAccount;
-      fetch("/api/broker/place-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          broker: acc.broker,
-          accessToken: acc.accessToken,
-          apiKey: acc.apiKey,
-          apiSecret: acc.apiSecret,
-          symbol: "NIFTY",
-          strikePrice: trade.strike,
-          optionType: trade.signalType === "BULLISH" ? "CE" : "PE",
-          transactionType: "SELL",
-          quantity: LOT_SIZES["NIFTY"] || LOT_SIZE,
-          price: exitPrice,
-          orderType: "MARKET",
-          product: "MIS",
-        }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            console.log(`Manual close order placed: ${data.orderId}`);
-          } else {
-            console.error(`Close order failed: ${data.error}`);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to place close order:", err);
-        });
-    }
-  },
-
-  closeAllTrades: () => {
-    const state = get();
-    const openTrades = state.trades.filter((t) => t.status === "OPEN");
-    if (openTrades.length === 0) return;
-
-    // Close each open trade
-    for (const trade of openTrades) {
-      get().closeTrade(trade.id);
     }
   },
 
@@ -1518,7 +1368,7 @@ export const useNSEStore = create<NSEStore>()(
   name: "nse-options-store",
   // Save only core data to localStorage; snapshots, signals, and trades are stored on the server
   partialize: (state) => ({
-    // selectedSymbol removed from persist — NIFTY only
+    selectedSymbol: state.selectedSymbol,
     selectedExpiry: state.selectedExpiry,
     autoRefresh: state.autoRefresh,
     refreshInterval: state.refreshInterval,

@@ -49,8 +49,3 @@ prisma/*.db
 
 # Vercel
 .vercel
-# Non-project folders
-skills/
-upload/
-download/
-worklog.md
