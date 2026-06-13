@@ -116,8 +116,8 @@ function SmartTradeCard({
             <span className="text-[9px] t-text-6">{tradeAction}</span>
             <span className="text-[10px] t-text-5 font-semibold uppercase tracking-[0.08em]">EXP {trade.expiry}</span>
             {trade.createdAt && (
-              <span className="text-[9px] t-text-6 flex items-center gap-0.5">
-                <Clock className="h-2.5 w-2.5" />
+              <span className="text-[11px] t-text-4 font-medium flex items-center gap-0.5">
+                <Clock className="h-3 w-3" />
                 {formatCreatedAt(trade.createdAt)}
               </span>
             )}
@@ -206,12 +206,12 @@ function SmartTradeCard({
         )}
 
         {!isOpen && (
-          <div className="flex items-center justify-between text-[10px]">
+          <div className="flex items-center justify-between text-[11px]">
             <span className={`px-2 py-0.5 rounded-full font-bold ${trade.pnl > 0 ? "bg-emerald-500/15 text-emerald-400" : trade.pnl < 0 ? "bg-red-500/15 text-red-400" : "t-text-7 t-text-4"}`}>
               {trade.pnl > 0 ? "WIN" : trade.pnl < 0 ? "LOSS" : "BE"}
             </span>
-            <span className="t-text-6 flex items-center gap-0.5">
-              <Clock className="h-2.5 w-2.5" />
+            <span className="t-text-4 font-medium flex items-center gap-0.5">
+              <Clock className="h-3 w-3" />
               {trade.time}
             </span>
           </div>
@@ -264,13 +264,13 @@ function SignalCard({ signal, linkedTrade }: {
           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isBullish ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
             {optionType}
           </span>
-          <span className="text-[10px] t-text-5 flex items-center gap-1">
+          <span className="text-[11px] t-text-4 font-medium flex items-center gap-1">
             <Clock className="h-3 w-3" />
             {signal.time}
           </span>
           {signal.createdAt && (
-            <span className="text-[9px] t-text-6 flex items-center gap-0.5">
-              <Calendar className="h-2.5 w-2.5" />
+            <span className="text-[11px] t-text-4 font-medium flex items-center gap-0.5">
+              <Calendar className="h-3 w-3" />
               {formatCreatedAt(signal.createdAt)}
             </span>
           )}
