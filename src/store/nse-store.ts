@@ -929,11 +929,12 @@ export const useNSEStore = create<NSEStore>()(
     // and no optionChain in state), allow ONE fetch from NSE so the user
     // sees the latest closing data instead of an empty screen.
     // This also handles: new expiry week, first-time app open, data wiped.
-    if (!checkIfMarketOpen()) {
+    if (!checkIfMarketOpen() && !forceRefresh) {
       const { optionChain, snapshots } = get();
       const hasData = optionChain?.chainData?.length > 0 || snapshots.length > 0;
-      if (hasData) return; // Data exists — show cached, no NSE hit
-      // No data for this expiry — allow one fetch to get closing data
+      // Allow fetch if <2 snapshots exist (need 2 for delta calculation)
+      if (hasData && snapshots.length >= 2) return;
+      // No data or <2 snapshots — allow fetch
     }
 
     // ===== LIVE MARKET: Full flow (fetch + save + calc + scan + exit check) =====
@@ -1122,8 +1123,8 @@ export const useNSEStore = create<NSEStore>()(
           isLoading: false,
           lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
           spotPrice: spotPrice || 0,
-          // Do not keep full snapshot history in memory; rely on disk for persistence.
-          snapshots: [],
+          // Keep last 2 snapshots in memory for delta calculation
+          snapshots: rows ? rows.slice(-2) : [],
           oiSummary,
           signals: allSignals,
           trades: updatedTrades,
