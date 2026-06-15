@@ -35,11 +35,16 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Data (generated at runtime — never commit)
-data/snapshots/
-data/delta-history/
-data/signals/
-data/trades/
+# Data (JSON/JSONL files generated at runtime — never commit)
+# Keep .gitkeep files for directory structure
+data/snapshots/**
+!data/snapshots/**/.gitkeep
+data/delta-history/**
+!data/delta-history/**/.gitkeep
+data/signals/**
+!data/signals/**/.gitkeep
+data/trades/**
+!data/trades/**/.gitkeep
 
 # Prisma
 prisma/*.db
