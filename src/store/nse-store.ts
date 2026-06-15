@@ -879,7 +879,8 @@ export const useNSEStore = create<NSEStore>()(
 
   setExpiry: async (expiry) => {
     // On expiry change, clear only session data (not trades from other expiries if any)
-    set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
+    // Clear only option chain/session data — keep signals/trades across expiries
+    set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, snapshotDelta: {}, snapshotDeltaTime: null });
     if (expiry) {
       // Load from disk first. If no data found, allow one NSE fetch
       // to download the latest closing data for this expiry week.
@@ -1243,11 +1244,10 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadSignalsFromFile: async () => {
-    const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
     try {
+      // Load ALL signals across expiries (single file per symbol)
       const response = await fetch(
-        `/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limit=10`
+        `/api/nse/signals?symbol=NIFTY&limit=50`
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -1278,18 +1278,15 @@ export const useNSEStore = create<NSEStore>()(
   },
 
   loadTradesFromFile: async () => {
-    const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
     try {
+      // Load ALL trades across expiries (single file per symbol)
       const response = await fetch(
-        `/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limitClosed=5`
+        `/api/nse/trades?symbol=NIFTY&limitClosed=20`
       );
       if (!response.ok) return;
       const data = await response.json();
       if (Array.isArray(data?.openTrades) && Array.isArray(data?.closedTrades)) {
-        const expiry = selectedExpiry;
         const normalizedTrades = [...data.openTrades, ...data.closedTrades].map((trade) => ({
-          expiry: expiry || trade.expiry || "",
           createdAt: trade.createdAt || new Date().toISOString(),
           ...trade,
         }));

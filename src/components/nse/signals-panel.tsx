@@ -336,6 +336,11 @@ function SignalCard({ signal, linkedTrade }: {
               {formatCreatedAt(signal.createdAt)}
             </span>
           )}
+          {signal.expiry && (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 uppercase tracking-wider">
+              {signal.expiry}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <div className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${strengthColor}`}>
