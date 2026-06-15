@@ -1,0 +1,873 @@
+   830→    return true;
+   831→  } catch {
+   832→    return true; // default to open if can't determine
+   833→  }
+   834→}
+   835→
+   836→// ===== Demo data helpers (shown when no real signals/trades exist) =====
+   837→function getDemoSignals(expiry: string): TradingSignal[] {
+   838→  const now = new Date().toISOString();
+   839→  return [
+   840→    {
+   841→      id: "sig-demo-bull-1",
+   842→      time: "10:45:00",
+   843→      createdAt: now,
+   844→      fromStrike: 23800,
+   845→      toStrike: 24000,
+   846→      type: "BULLISH",
+   847→      strength: 70,
+   848→      reason: "PE OI support at 23800 → CALL BUY 24000",
+   849→      entryPrice: 85.50,
+   850→      oiChange: 125000,
+   851→      expiry,
+   852→      executed: true,
+   853→      status: "EXECUTED",
+   854→      tradeId: "trade-demo-bull-1",
+   855→      brokerOrderId: "ORD001",
+   856→      isRealTrade: false,
+   857→    },
+   858→    {
+   859→      id: "sig-demo-bear-2",
+   860→      time: "12:15:00",
+   861→      createdAt: new Date(Date.now() - 3600000).toISOString(),
+   862→      fromStrike: 24200,
+   863→      toStrike: 24000,
+   864→      type: "BEARISH",
+   865→      strength: 65,
+   866→      reason: "CE OI resistance at 24200 → PUT BUY 24000",
+   867→      entryPrice: 120.00,
+   868→      oiChange: 98000,
+   869→      expiry,
+   870→      executed: true,
+   871→      status: "EXECUTED",
+   872→      tradeId: "trade-demo-bear-2",
+   873→      brokerOrderId: "ORD002",
+   874→      isRealTrade: false,
+   875→    },
+   876→    {
+   877→      id: "sig-demo-bull-3",
+   878→      time: "14:02:00",
+   879→      createdAt: now,
+   880→      fromStrike: 23700,
+   881→      toStrike: 23900,
+   882→      type: "BULLISH",
+   883→      strength: 55,
+   884→      reason: "PE OI support at 23700 → CALL BUY 23900",
+   885→      entryPrice: 142.30,
+   886→      oiChange: 72000,
+   887→      expiry,
+   888→      executed: true,
+   889→      status: "APPROVED",
+   890→      tradeId: "trade-demo-bull-3",
+   891→      isRealTrade: false,
+   892→    },
+   893→  ];
+   894→}
+   895→
+   896→function getDemoTrades(expiry: string): Trade[] {
+   897→  const now = new Date().toISOString();
+   898→  // WIN: 24000 CE entry 85.50 → +50% target = 128.25
+   899→  const winEntry = 85.50;
+   900→  const winExit = winEntry * 1.50; // 128.25 — 50% target hit
+   901→  const winPct = ((winExit - winEntry) / winEntry) * 100; // 50%
+   902→  // LOSS: 24000 PE entry 120.00 → -15% stop loss = 102.00
+   903→  const lossEntry = 120.00;
+   904→  const lossExit = lossEntry * 0.85; // 102.00 — 15% SL hit
+   905→  const lossPct = -15.0;
+   906→  // OPEN: 23900 CE entry 142.30 — still running
+   907→  const openEntry = 142.30;
+   908→
+   909→  return [
+   910→    {
+   911→      id: "trade-demo-bull-1",
+   912→      time: "10:45:00",
+   913→      createdAt: now,
+   914→      signalType: "BULLISH",
+   915→      strike: 24000,
+   916→      entryPrice: winEntry,
+   917→      exitPrice: winExit,
+   918→      pnl: (winExit - winEntry) * 65,
+   919→      status: "CLOSED",
+   920→      currentStop: winExit,
+   921→      highestProfitPct: winPct,
+   922→      maxDrawdownPct: 3.5,
+   923→      priceHistory: [
+   924→        { time: "10:45:00", price: winEntry },
+   925→        { time: "11:00:00", price: 92.00 },
+   926→        { time: "11:15:00", price: 88.50 },
+   927→        { time: "11:30:00", price: 105.00 },
+   928→        { time: "11:45:00", price: 118.00 },
+   929→        { time: "12:00:00", price: 125.80 },
+   930→        { time: "12:15:00", price: winExit },
+   931→      ],
+   932→      expiry,
+   933→      signalId: "sig-demo-bull-1",
+   934→      isRealTrade: false,
+   935→      brokerOrderId: "ORD001",
+   936→    },
+   937→    {
+   938→      id: "trade-demo-bear-2",
+   939→      time: "12:15:00",
+   940→      createdAt: new Date(Date.now() - 3600000).toISOString(),
+   941→      signalType: "BEARISH",
+   942→      strike: 24000,
+   943→      entryPrice: lossEntry,
+   944→      exitPrice: lossExit,
+   945→      pnl: (lossExit - lossEntry) * 65,
+   946→      status: "CLOSED",
+   947→      currentStop: lossExit,
+   948→      highestProfitPct: 5.5,
+   949→      maxDrawdownPct: Math.abs(lossPct),
+   950→      priceHistory: [
+   951→        { time: "12:15:00", price: lossEntry },
+   952→        { time: "12:30:00", price: 115.00 },
+   953→        { time: "12:45:00", price: 110.50 },
+   954→        { time: "13:00:00", price: 107.00 },
+   955→        { time: "13:15:00", price: 105.00 },
+   956→        { time: "13:30:00", price: 103.50 },
+   957→        { time: "13:45:00", price: lossExit },
+   958→      ],
+   959→      expiry,
+   960→      signalId: "sig-demo-bear-2",
+   961→      isRealTrade: false,
+   962→      brokerOrderId: "ORD002",
+   963→    },
+   964→    {
+   965→      id: "trade-demo-bull-3",
+   966→      time: "14:02:00",
+   967→      createdAt: now,
+   968→      signalType: "BULLISH",
+   969→      strike: 23900,
+   970→      entryPrice: openEntry,
+   971→      exitPrice: 0,
+   972→      pnl: 0,
+   973→      status: "OPEN",
+   974→      currentStop: openEntry * 1.15, // SL moved to +15% lock (peak was >30%)
+   975→      highestProfitPct: 42.1,
+   976→      maxDrawdownPct: 8.3,
+   977→      priceHistory: [
+   978→        { time: "14:02:00", price: openEntry },
+   979→        { time: "14:15:00", price: 155 },
+   980→        { time: "14:30:00", price: 170 },
+   981→        { time: "14:45:00", price: 188 },
+   982→        { time: "15:00:00", price: 202.20 },
+   983→      ],
+   984→      expiry,
+   985→      signalId: "sig-demo-bull-3",
+   986→      isRealTrade: false,
+   987→    },
+   988→  ];
+   989→}
+   990→
+   991→export const useNSEStore = create<NSEStore>()(
+   992→  persist(
+   993→    (set, get) => ({
+   994→  // NIFTY only (selectedSymbol removed)
+   995→  selectedExpiry: "",
+   996→  expiryDates: [],
+   997→  optionChain: null,
+   998→  isLoading: false,
+   999→  isExpiryLoading: false,
+  1000→  error: null,
+  1001→  autoRefresh: true,
+  1002→  refreshInterval: 30,
+  1003→  lastUpdated: null,
+  1004→
+  1005→  snapshots: [],
+  1006→  maxSnapshots: 10,
+  1007→
+  1008→  oiSummary: null,
+  1009→
+  1010→  signals: [],
+  1011→  oiThreshold: 25000,
+  1012→
+  1013→  trades: [],
+  1014→
+  1015→  spotPrice: 0,
+  1016→
+  1017→  snapshotDelta: {} as Record<number, { ceOIChange: number; peOIChange: number; ceLTPChange: number; peLTPChange: number }>,
+  1018→  snapshotDeltaTime: null,
+  1019→
+  1020→  // Semi-auto trading
+  1021→  tradeMode: "PAPER" as TradeMode,
+  1022→  pendingSignals: [],
+  1023→  brokerAccount: null,
+  1024→
+  1025→  isMarketOpen: false,
+  1026→  checkMarketHours: () => {
+  1027→    set({ isMarketOpen: checkIfMarketOpen() });
+  1028→  },
+  1029→
+  1030→  // setSymbol removed — NIFTY only
+  1031→
+  1032→
+  1033→  setExpiry: async (expiry) => {
+  1034→    // On expiry change, clear only session data (not trades from other expiries if any)
+  1035→    set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, signals: [], trades: [], snapshotDelta: {}, snapshotDeltaTime: null });
+  1036→    if (expiry) {
+  1037→      // Load from disk first. If no data found, allow one NSE fetch
+  1038→      // to download the latest closing data for this expiry week.
+  1039→      const loaded = await loadFromDisk();
+  1040→      // After disk load, if still no signals/trades, show demo data for preview
+  1041→      const state = get();
+  1042→      if (state.signals.length === 0 && state.trades.length === 0) {
+  1043→        set({ signals: getDemoSignals(expiry), trades: getDemoTrades(expiry) });
+  1044→      }
+  1045→      if (!loaded) {
+  1046→        // No disk data for this expiry — trigger one fetch
+  1047→        await get().fetchOptionChain();
+  1048→      }
+  1049→    }
+  1050→  },
+  1051→
+  1052→  setAutoRefresh: (val) => set({ autoRefresh: val }),
+  1053→  setRefreshInterval: (seconds) => set({ refreshInterval: seconds }),
+  1054→  setOIThreshold: (threshold) => set({ oiThreshold: threshold }),
+  1055→
+  1056→  fetchExpiryDates: async () => {
+  1057→    set({ isExpiryLoading: true, error: null });
+  1058→    try {
+  1059→      const res = await fetch(`/api/nse/expiry?symbol=NIFTY`);
+  1060→      const resData = await res.json();
+  1061→      if (!resData?.expiryDates?.length) throw new Error("Failed to fetch expiry dates from NSE");
+  1062→      const expiryDates = resData.expiryDates || [];
+  1063→      set({ expiryDates, isExpiryLoading: false });
+  1064→      if (expiryDates.length > 0 && !get().selectedExpiry) {
+  1065→        set({ selectedExpiry: expiryDates[0] });
+  1066→        // Load from disk. If no data found, trigger one NSE fetch
+  1067→        // so user sees latest data even when opening off-market.
+  1068→        const loaded = await loadFromDisk();
+  1069→        // After disk load, if still no signals/trades, show demo data
+  1070→        const state = get();
+  1071→        if (state.signals.length === 0 && state.trades.length === 0) {
+  1072→          set({ signals: getDemoSignals(expiryDates[0]), trades: getDemoTrades(expiryDates[0]) });
+  1073→        }
+  1074→        if (!loaded) {
+  1075→          void get().fetchOptionChain();
+  1076→        }
+  1077→      }
+  1078→    } catch (err: unknown) {
+  1079→      set({ error: (err as Error).message, isExpiryLoading: false });
+  1080→    }
+  1081→  },
+  1082→
+  1083→  fetchOptionChain: async (forceRefresh = false) => {
+  1084→    const { selectedExpiry, snapshots, oiThreshold, trades } = get();
+  1085→    if (!selectedExpiry) return;
+  1086→
+  1087→    // ===== OFF-MARKET GATE =====
+  1088→    // Don't fetch from NSE or save snapshots when market is closed.
+  1089→    // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
+  1090→    //
+  1091→    // EXCEPTION: If no data exists for current expiry (no snapshots on disk
+  1092→    // and no optionChain in state), allow ONE fetch from NSE so the user
+  1093→    // sees the latest closing data instead of an empty screen.
+  1094→    // This also handles: new expiry week, first-time app open, data wiped.
+  1095→    if (!checkIfMarketOpen()) {
+  1096→      const { optionChain, snapshots } = get();
+  1097→      const hasData = optionChain?.chainData?.length > 0 || snapshots.length > 0;
+  1098→      if (hasData) return; // Data exists — show cached, no NSE hit
+  1099→      // No data for this expiry — allow one fetch to get closing data
+  1100→    }
+  1101→
+  1102→    // ===== LIVE MARKET: Full flow (fetch + save + calc + scan + exit check) =====
+  1103→    set({ isLoading: true, error: null });
+  1104→    try {
+  1105→      const params = new URLSearchParams({
+  1106→        symbol: "NIFTY",
+  1107→        expiry: selectedExpiry,
+  1108→      });
+  1109→
+  1110→      // Direct fetch from NSE via server API
+  1111→      const res = await fetch(`/api/nse/option-chain?${params}`);
+  1112→      const data = await res.json();
+  1113→      if (!data?.chainData?.length) throw new Error((data as Record<string, unknown>)?.error as string || "Failed to fetch option chain");
+  1114→
+  1115→      // Save snapshot before updating
+  1116→      const currentChain: OptionData[] = data.chainData || [];
+  1117→      const spotPrice: number = data.spotPrice || 0;
+  1118→
+  1119→      if (currentChain.length > 0 && spotPrice > 0) {
+  1120→        const newSnapshot: OISnapshot = {
+  1121→          timestamp: new Date().toISOString(),
+  1122→          expiry: selectedExpiry,
+  1123→          spotPrice,
+  1124→          strikes: currentChain.map((item: OptionData) => ({
+  1125→            strike: item.strikePrice,
+  1126→            ceOI: item.CE?.openInterest || 0,
+  1127→            peOI: item.PE?.openInterest || 0,
+  1128→            ceLTP: item.CE?.lastPrice || 0,
+  1129→            peLTP: item.PE?.lastPrice || 0,
+  1130→          })),
+  1131→        };
+  1132→
+  1133→        // Persist snapshot to disk immediately and obtain last snapshots from server
+  1134→        // to avoid race conditions between write and subsequent read.
+  1135→        let prevSnapshot: OISnapshot | null = null;
+  1136→        try {
+  1137→          const rows = await get().saveSnapshotToCsv(newSnapshot);
+  1138→          if (rows && rows.length >= 2) {
+  1139→            prevSnapshot = rows[rows.length - 2];
+  1140→          } else if (rows && rows.length === 1) {
+  1141→            prevSnapshot = rows[0];
+  1142→          }
+  1143→        } catch {
+  1144→          prevSnapshot = null;
+  1145→        }
+  1146→
+  1147→        // ===== Calculate Snapshot-based OI Delta (like Python's get_delta) =====
+  1148→        let snapshotDelta: Record<number, { ceOIChange: number; peOIChange: number; ceLTPChange: number; peLTPChange: number }> = {};
+  1149→        let snapshotDeltaTime: string | null = null;
+  1150→
+  1151→        if (prevSnapshot) {
+  1152→          const prevMap = new Map<number, { ceOI: number; peOI: number; ceLTP: number; peLTP: number }>();
+  1153→          for (const s of prevSnapshot.strikes) {
+  1154→            prevMap.set(s.strike, { ceOI: s.ceOI, peOI: s.peOI, ceLTP: s.ceLTP, peLTP: s.peLTP });
+  1155→          }
+  1156→
+  1157→          for (const item of currentChain) {
+  1158→            const strike = item.strikePrice;
+  1159→            const prev = prevMap.get(strike);
+  1160→            if (!prev) continue;
+  1161→
+  1162→            const currCEOI = item.CE?.openInterest || 0;
+  1163→            const currPEOI = item.PE?.openInterest || 0;
+  1164→            const currCELTP = item.CE?.lastPrice || 0;
+  1165→            const currPELTP = item.PE?.lastPrice || 0;
+  1166→
+  1167→            const ceOIChange = currCEOI - prev.ceOI;
+  1168→            const peOIChange = currPEOI - prev.peOI;
+  1169→            const ceLTPChange = prev.ceLTP > 0 ? currCELTP - prev.ceLTP : 0;
+  1170→            const peLTPChange = prev.peLTP > 0 ? currPELTP - prev.peLTP : 0;
+  1171→
+  1172→            if (ceOIChange !== 0 || peOIChange !== 0) {
+  1173→              snapshotDelta[strike] = { ceOIChange, peOIChange, ceLTPChange, peLTPChange };
+  1174→            }
+  1175→          }
+  1176→
+  1177→          snapshotDeltaTime = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
+  1178→
+  1179→          // Persist delta to disk for: app restart, overnight reference, backtesting
+  1180→          if (Object.keys(snapshotDelta).length > 0) {
+  1181→            void get().saveDeltaToFile(prevSnapshot.timestamp);
+  1182→          }
+  1183→        }
+  1184→
+  1185→        // Calculate OI Summary
+  1186→        const oiSummary = calculateOISummary(prevSnapshot, currentChain, spotPrice, selectedExpiry);
+  1187→
+  1188→        // Scan signals using the simplified OI-reduction rule only
+  1189→        const newSignals = scanSignalsImproved(prevSnapshot, currentChain, spotPrice, selectedExpiry, oiThreshold);
+  1190→
+  1191→        for (const sig of newSignals) {
+  1192→          void get().saveSignalToFile(sig);
+  1193→        }
+  1194→
+  1195→        // Check exit conditions on open trades
+  1196→        let updatedTrades = checkExitConditions(currentChain, trades);
+  1197→
+  1198→        // Execute new trades from signals
+  1199→        // In PAPER mode: auto-execute. In SEMI_AUTO mode: add to pending queue
+  1200→        const currentTradeMode = get().tradeMode;
+  1201→
+  1202→        for (const sig of newSignals) {
+  1203→          if (sig.strength < 50) {
+  1204→            sig.skipReason = "Weak signal (<50%)";
+  1205→            sig.status = "REJECTED";
+  1206→            continue;
+  1207→          }
+  1208→          // Max 3 open trades at a time
+  1209→          const openCount = updatedTrades.filter((t) => t.status === "OPEN").length;
+  1210→          if (openCount >= 3) {
+  1211→            sig.skipReason = `Max ${3} open trades reached`;
+  1212→            sig.status = "REJECTED";
+  1213→            continue;
+  1214→          }
+  1215→          // Check if already have open trade at this strike
+  1216→          const existingOpen = updatedTrades.find(
+  1217→            (t) => t.strike === sig.toStrike && t.status === "OPEN"
+  1218→          );
+  1219→          if (existingOpen) {
+  1220→            sig.skipReason = "Already open at this strike";
+  1221→            sig.status = "REJECTED";
+  1222→            continue;
+  1223→          }
+  1224→          // Skip if entry price is invalid
+  1225→          if (!sig.entryPrice || sig.entryPrice <= 0) {
+  1226→            sig.skipReason = "Invalid entry price";
+  1227→            sig.status = "REJECTED";
+  1228→            continue;
+  1229→          }
+  1230→
+  1231→          // PAPER mode: auto-execute the trade
+  1232→          if (currentTradeMode === "PAPER") {
+  1233→            const tradeId = `trade-${Date.now()}-${sig.toStrike}`;
+  1234→            sig.tradeId = tradeId;
+  1235→            sig.executed = true;
+  1236→            sig.status = "EXECUTED";
+  1237→
+  1238→            // Both CALL BUY and PUT BUY are buy positions → stop loss below entry
+  1239→            const initialStop = sig.entryPrice * (1 - INITIAL_STOP_PCT / 100);
+  1240→
+  1241→            updatedTrades.push({
+  1242→              id: tradeId,
+  1243→              time: sig.time,
+  1244→              signalType: sig.type,
+  1245→              strike: sig.toStrike,
+  1246→              entryPrice: sig.entryPrice,
+  1247→              exitPrice: 0,
+  1248→              pnl: 0,
+  1249→              expiry: sig.expiry,
+  1250→              status: "OPEN",
+  1251→              currentStop: initialStop,
+  1252→              highestProfitPct: 0,
+  1253→              maxDrawdownPct: 0,
+  1254→              priceHistory: [{ time: sig.time, price: sig.entryPrice }],
+  1255→              signalId: sig.id,
+  1256→              isRealTrade: false,
+  1257→            });
+  1258→          } else {
+  1259→            // SEMI_AUTO mode: add to pending queue for approval
+  1260→            sig.status = "PENDING";
+  1261→          }
+  1262→        }
+  1263→
+  1264→        // Keep all signals for display
+  1265→        const allSignals = [...get().signals, ...newSignals].slice(-20);
+  1266→
+  1267→        // Only save trades that actually changed to prevent unbounded JSONL growth
+  1268→        const prevTradesMap = new Map<string, Trade>();
+  1269→        for (const t of trades) prevTradesMap.set(t.id, t);
+  1270→        for (const trade of updatedTrades) {
+  1271→          const prev = prevTradesMap.get(trade.id);
+  1272→          if (!prev) {
+  1273→            // New trade — must save
+  1274→            void get().saveTradeToFile(trade);
+  1275→          } else if (prev.status !== trade.status || prev.exitPrice !== trade.exitPrice ||
+  1276→                     prev.currentStop !== trade.currentStop || prev.pnl !== trade.pnl ||
+  1277→                     prev.priceHistory.length !== trade.priceHistory.length) {
+  1278→            // Trade state changed — save
+  1279→            void get().saveTradeToFile(trade);
+  1280→          }
+  1281→        }
+  1282→
+  1283→        set({
+  1284→          optionChain: data as unknown as OptionChainState,
+  1285→          isLoading: false,
+  1286→          lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
+  1287→          spotPrice: spotPrice || 0,
+  1288→          // Do not keep full snapshot history in memory; rely on disk for persistence.
+  1289→          snapshots: [],
+  1290→          oiSummary,
+  1291→          signals: allSignals,
+  1292→          trades: updatedTrades,
+  1293→          snapshotDelta,
+  1294→          snapshotDeltaTime,
+  1295→        });
+  1296→
+  1297→        if (!prevSnapshot) {
+  1298→          // No previous snapshot → load last saved delta from disk (e.g. yesterday's closing)
+  1299→          void get().loadDeltaFromFile();
+  1300→        }
+  1301→      } else {
+  1302→        set({
+  1303→          optionChain: data as unknown as OptionChainState,
+  1304→          isLoading: false,
+  1305→          lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
+  1306→        });
+  1307→      }
+  1308→    } catch (err: unknown) {
+  1309→      set({ error: (err as Error).message, isLoading: false });
+  1310→    }
+  1311→  },
+  1312→
+  1313→  saveDeltaToFile: async (prevTimestamp: string) => {
+  1314→    const { selectedExpiry, snapshotDelta, spotPrice } = get();
+  1315→    if (!selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
+  1316→    try {
+  1317→      await fetch("/api/nse/delta-history", {
+  1318→        method: "POST",
+  1319→        headers: { "Content-Type": "application/json" },
+  1320→        body: JSON.stringify({
+  1321→          symbol: "NIFTY",
+  1322→          expiry: selectedExpiry,
+  1323→          timestamp: new Date().toISOString(),
+  1324→          spotPrice,
+  1325→          prevTimestamp,
+  1326→          snapshotDelta,
+  1327→        }),
+  1328→      });
+  1329→    } catch {
+  1330→      // Ignore write failures
+  1331→    }
+  1332→  },
+  1333→
+  1334→  loadDeltaFromFile: async () => {
+  1335→    const { selectedExpiry } = get();
+  1336→    if (!selectedExpiry) return;
+  1337→    try {
+  1338→      const response = await fetch(
+  1339→        `/api/nse/delta-history?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
+  1340→      );
+  1341→      if (!response.ok) return;
+  1342→      const data = await response.json();
+  1343→      if (data?.snapshotDelta) {
+  1344→        set({
+  1345→          snapshotDelta: data.snapshotDelta,
+  1346→          snapshotDeltaTime: data.snapshotDeltaTime || null,
+  1347→        });
+  1348→      }
+  1349→    } catch {
+  1350→      // Ignore read failures
+  1351→    }
+  1352→  },
+  1353→
+  1354→  saveSnapshotToCsv: async (snapshot) => {
+  1355→    if (!snapshot.expiry) return null;
+  1356→    try {
+  1357→      const resp = await fetch("/api/nse/snapshots", {
+  1358→        method: "POST",
+  1359→        headers: { "Content-Type": "application/json" },
+  1360→        body: JSON.stringify({
+  1361→          symbol: "NIFTY",
+  1362→          expiry: snapshot.expiry,
+  1363→          timestamp: snapshot.timestamp,
+  1364→          spotPrice: snapshot.spotPrice,
+  1365→          strikes: snapshot.strikes,
+  1366→        }),
+  1367→      });
+  1368→      if (!resp.ok) return null;
+  1369→      const data = await resp.json();
+  1370→      return Array.isArray(data?.snapshots) ? data.snapshots : null;
+  1371→    } catch {
+  1372→      return null;
+  1373→    }
+  1374→  },
+  1375→
+  1376→  loadSnapshotHistory: async () => {
+  1377→    const { selectedExpiry } = get();
+  1378→    if (!selectedExpiry) return;
+  1379→    try {
+  1380→      const response = await fetch(
+  1381→          `/api/nse/snapshots?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
+  1382→        );
+  1383→      if (!response.ok) return;
+  1384→      const data = await response.json();
+  1385→      if (Array.isArray(data?.snapshots)) {
+  1386→        set({ snapshots: data.snapshots });
+  1387→      }
+  1388→    } catch {
+  1389→      // Ignore read failures
+  1390→    }
+  1391→  },
+  1392→
+  1393→  saveSignalToFile: async (signal) => {
+  1394→    const { selectedExpiry } = get();
+  1395→    const expiry = signal.expiry || selectedExpiry;
+  1396→    if (!expiry) return;
+  1397→    try {
+  1398→      await fetch(`/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
+  1399→        method: "POST",
+  1400→        headers: { "Content-Type": "application/json" },
+  1401→        body: JSON.stringify(signal),
+  1402→      });
+  1403→    } catch {
+  1404→      // Ignore write failures
+  1405→    }
+  1406→  },
+  1407→
+  1408→  loadSignalsFromFile: async () => {
+  1409→    const { selectedExpiry } = get();
+  1410→    if (!selectedExpiry) return;
+  1411→    try {
+  1412→      const response = await fetch(
+  1413→        `/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limit=10`
+  1414→      );
+  1415→      if (!response.ok) return;
+  1416→      const data = await response.json();
+  1417→      if (Array.isArray(data?.signals)) {
+  1418→        const normalized = data.signals.map((s: Record<string, unknown>) => ({
+  1419→          createdAt: s.createdAt || new Date().toISOString(),
+  1420→          ...s,
+  1421→        }));
+  1422→        set({ signals: normalized });
+  1423→      }
+  1424→    } catch {
+  1425→      // Ignore read failures
+  1426→    }
+  1427→  },
+  1428→
+  1429→  saveTradeToFile: async (trade) => {
+  1430→    const { selectedExpiry } = get();
+  1431→    const expiry = trade.expiry || selectedExpiry;
+  1432→    if (!expiry) return;
+  1433→    try {
+  1434→      await fetch(`/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
+  1435→        method: "POST",
+  1436→        headers: { "Content-Type": "application/json" },
+  1437→        body: JSON.stringify(trade),
+  1438→      });
+  1439→    } catch {
+  1440→      // Ignore write failures
+  1441→    }
+  1442→  },
+  1443→
+  1444→  loadTradesFromFile: async () => {
+  1445→    const { selectedExpiry } = get();
+  1446→    if (!selectedExpiry) return;
+  1447→    try {
+  1448→      const response = await fetch(
+  1449→        `/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}&limitClosed=5`
+  1450→      );
+  1451→      if (!response.ok) return;
+  1452→      const data = await response.json();
+  1453→      if (Array.isArray(data?.openTrades) && Array.isArray(data?.closedTrades)) {
+  1454→        const expiry = selectedExpiry;
+  1455→        const normalizedTrades = [...data.openTrades, ...data.closedTrades].map((trade) => ({
+  1456→          expiry: expiry || trade.expiry || "",
+  1457→          createdAt: trade.createdAt || new Date().toISOString(),
+  1458→          ...trade,
+  1459→        }));
+  1460→        set({ trades: normalizedTrades });
+  1461→      }
+  1462→    } catch {
+  1463→      // Ignore read failures
+  1464→    }
+  1465→  },
+  1466→
+  1467→  // Semi-auto trading methods
+  1468→  setTradeMode: (mode) => set({ tradeMode: mode }),
+  1469→
+  1470→  approveSignal: (signalId) => {
+  1471→    const state = get();
+  1472→    const signal = state.signals.find((s) => s.id === signalId);
+  1473→    if (!signal) return;
+  1474→
+  1475→    const isBrokerConnected = state.brokerAccount?.status === "CONNECTED" && state.brokerAccount.broker !== "GROWW";
+  1476→
+  1477→    // Update signal status to APPROVED immediately
+  1478→    const updatedSignals = state.signals.map((s) =>
+  1479→      s.id === signalId
+  1480→        ? { ...s, status: "APPROVED" as const, executed: true, isRealTrade: isBrokerConnected }
+  1481→        : s
+  1482→    );
+  1483→
+  1484→    // Remove from pending queue
+  1485→    const updatedPending = state.pendingSignals.filter((s) => s.id !== signalId);
+  1486→
+  1487→    // Create trade
+  1488→    const trade: Trade = {
+  1489→      id: `trade-${Date.now()}-${signal.toStrike}`,
+  1490→      time: signal.time,
+  1491→      createdAt: new Date().toISOString(),
+  1492→      signalType: signal.type,
+  1493→      strike: signal.toStrike,
+  1494→      entryPrice: signal.entryPrice,
+  1495→      exitPrice: 0,
+  1496→      pnl: 0,
+  1497→      expiry: signal.expiry,
+  1498→      status: "OPEN",
+  1499→      currentStop: signal.entryPrice * (1 - INITIAL_STOP_PCT / 100),
+  1500→      highestProfitPct: 0,
+  1501→      maxDrawdownPct: 0,
+  1502→      priceHistory: [{ time: signal.time, price: signal.entryPrice }],
+  1503→      signalId: signal.id,
+  1504→      isRealTrade: isBrokerConnected,
+  1505→      brokerName: isBrokerConnected ? state.brokerAccount?.broker : undefined,
+  1506→    };
+  1507→
+  1508→    set({
+  1509→      signals: updatedSignals,
+  1510→      pendingSignals: updatedPending,
+  1511→      trades: [...state.trades, trade],
+  1512→    });
+  1513→    void get().saveSignalToFile(updatedSignals.find((s) => s.id === signalId) ?? signal);
+  1514→    void get().saveTradeToFile(trade);
+  1515→
+  1516→    // If broker is connected, place real order via API
+  1517→    if (isBrokerConnected && state.brokerAccount) {
+  1518→      const acc = state.brokerAccount;
+  1519→      const symbol = "NIFTY";
+  1520→      fetch("/api/broker/place-order", {
+  1521→        method: "POST",
+  1522→        headers: { "Content-Type": "application/json" },
+  1523→        body: JSON.stringify({
+  1524→          broker: acc.broker,
+  1525→          accessToken: acc.accessToken,
+  1526→          apiKey: acc.apiKey,
+  1527→          apiSecret: acc.apiSecret,
+  1528→          symbol,
+  1529→          strikePrice: signal.toStrike,
+  1530→          optionType: signal.type.includes("CALL") ? "CE" : "PE",
+  1531→          transactionType: "BUY",
+  1532→          quantity: LOT_SIZES[symbol] || LOT_SIZE,
+  1533→          price: signal.entryPrice,
+  1534→          orderType: "MARKET",
+  1535→          product: "MIS",
+  1536→        }),
+  1537→      })
+  1538→        .then((res) => res.json())
+  1539→        .then((data) => {
+  1540→          if (data.success && data.orderId) {
+  1541→            // Update the trade with real broker order ID
+  1542→            const { trades: currentTrades } = get();
+  1543→            const updatedTrades = currentTrades.map((t) =>
+  1544→              t.id === trade.id
+  1545→                ? { ...t, brokerOrderId: data.orderId }
+  1546→                : t
+  1547→            );
+  1548→            // Mark signal as EXECUTED with order ID
+  1549→            const { signals: currentSignals } = get();
+  1550→            const finalSignals = currentSignals.map((s) =>
+  1551→              s.id === signalId ? { ...s, tradeId: trade.id, status: "EXECUTED" as const, brokerOrderId: data.orderId } : s
+  1552→            );
+  1553→            set({ trades: updatedTrades, signals: finalSignals });
+  1554→            console.log(`Real order placed: ${data.orderId} — ${data.message}`);
+  1555→          } else {
+  1556→            console.error(`Order placement failed: ${data.error}`);
+  1557→          }
+  1558→        })
+  1559→        .catch((err) => {
+  1560→          console.error("Failed to place real order:", err);
+  1561→        });
+  1562→    }
+  1563→  },
+  1564→
+  1565→  rejectSignal: (signalId) => {
+  1566→    const state = get();
+  1567→    const updatedSignals = state.signals.map((s) =>
+  1568→      s.id === signalId ? { ...s, status: "REJECTED" as const, executed: false } : s
+  1569→    );
+  1570→    const updatedPending = state.pendingSignals.filter((s) => s.id !== signalId);
+  1571→    set({ signals: updatedSignals, pendingSignals: updatedPending });
+  1572→    const rejected = updatedSignals.find((s) => s.id === signalId);
+  1573→    if (rejected) {
+  1574→      void get().saveSignalToFile(rejected);
+  1575→    }
+  1576→  },
+  1577→
+  1578→  closeTrade: (tradeId) => {
+  1579→    const state = get();
+  1580→    const trade = state.trades.find((t) => t.id === tradeId);
+  1581→    if (!trade || trade.status !== "OPEN") return;
+  1582→
+  1583→    // Get current LTP from option chain for exit price
+  1584→    const chainData = state.optionChain?.chainData;
+  1585→    let exitPrice = trade.entryPrice; // fallback to entry if no LTP available
+  1586→    if (chainData && Array.isArray(chainData)) {
+  1587→      for (const rawItem of chainData) {
+  1588→        const item = rawItem as unknown as { strikePrice?: number; CE?: { lastPrice?: number }; PE?: { lastPrice?: number } };
+  1589→        if (item.strikePrice === trade.strike) {
+  1590→          exitPrice = trade.signalType === "BULLISH"
+  1591→            ? (item.CE?.lastPrice || trade.entryPrice)
+  1592→            : (item.PE?.lastPrice || trade.entryPrice);
+  1593→          break;
+  1594→        }
+  1595→      }
+  1596→    }
+  1597→
+  1598→    const pnl = (exitPrice - trade.entryPrice) * LOT_SIZE;
+  1599→    const profitPct = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+  1600→    const now = new Date();
+  1601→    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+  1602→
+  1603→    const updatedTrade: Trade = {
+  1604→      ...trade,
+  1605→      status: "CLOSED",
+  1606→      exitPrice,
+  1607→      pnl,
+  1608→      highestProfitPct: Math.max(trade.highestProfitPct, profitPct > 0 ? profitPct : 0),
+  1609→      priceHistory: [...trade.priceHistory, { time: timeStr, price: exitPrice }],
+  1610→    };
+  1611→
+  1612→    const updatedTrades = state.trades.map((t) =>
+  1613→      t.id === tradeId ? updatedTrade : t
+  1614→    );
+  1615→    set({ trades: updatedTrades });
+  1616→    void get().saveTradeToFile(updatedTrade);
+  1617→
+  1618→    // If real trade with broker, place exit order (SELL)
+  1619→    if (trade.isRealTrade && trade.brokerName && state.brokerAccount) {
+  1620→      const acc = state.brokerAccount;
+  1621→      fetch("/api/broker/place-order", {
+  1622→        method: "POST",
+  1623→        headers: { "Content-Type": "application/json" },
+  1624→        body: JSON.stringify({
+  1625→          broker: acc.broker,
+  1626→          accessToken: acc.accessToken,
+  1627→          apiKey: acc.apiKey,
+  1628→          apiSecret: acc.apiSecret,
+  1629→          symbol: "NIFTY",
+  1630→          strikePrice: trade.strike,
+  1631→          optionType: trade.signalType === "BULLISH" ? "CE" : "PE",
+  1632→          transactionType: "SELL",
+  1633→          quantity: LOT_SIZES["NIFTY"] || LOT_SIZE,
+  1634→          price: exitPrice,
+  1635→          orderType: "MARKET",
+  1636→          product: "MIS",
+  1637→        }),
+  1638→      })
+  1639→        .then((res) => res.json())
+  1640→        .then((data) => {
+  1641→          if (data.success) {
+  1642→            console.log(`Manual close order placed: ${data.orderId}`);
+  1643→          } else {
+  1644→            console.error(`Close order failed: ${data.error}`);
+  1645→          }
+  1646→        })
+  1647→        .catch((err) => {
+  1648→          console.error("Failed to place close order:", err);
+  1649→        });
+  1650→    }
+  1651→  },
+  1652→
+  1653→  closeAllTrades: () => {
+  1654→    const state = get();
+  1655→    const openTrades = state.trades.filter((t) => t.status === "OPEN");
+  1656→    if (openTrades.length === 0) return;
+  1657→
+  1658→    // Close each open trade
+  1659→    for (const trade of openTrades) {
+  1660→      get().closeTrade(trade.id);
+  1661→    }
+  1662→  },
+  1663→
+  1664→  connectBroker: (account) => {
+  1665→    set({ brokerAccount: { ...account, status: "CONNECTED", connectedAt: new Date().toISOString() } });
+  1666→  },
+  1667→
+  1668→  disconnectBroker: () => {
+  1669→    const current = get().brokerAccount;
+  1670→    if (current) {
+  1671→      set({ brokerAccount: { ...current, status: "DISCONNECTED", connectedAt: null } });
+  1672→    }
+  1673→  },
+  1674→
+  1675→  updateBrokerBalance: (balance) => {
+  1676→    const current = get().brokerAccount;
+  1677→    if (current) {
+  1678→      set({ brokerAccount: { ...current, balance } });
+  1679→    }
+  1680→  },
+  1681→}),
+  1682→{
+  1683→  name: "nse-options-store",
+  1684→  // Save only core data to localStorage; snapshots, signals, and trades are stored on the server
+  1685→  partialize: (state) => ({
+  1686→    // selectedSymbol removed from persist — NIFTY only
+  1687→    selectedExpiry: state.selectedExpiry,
+  1688→    autoRefresh: state.autoRefresh,
+  1689→    refreshInterval: state.refreshInterval,
+  1690→    oiThreshold: state.oiThreshold,
+  1691→    lastUpdated: state.lastUpdated,
+  1692→    optionChain: state.optionChain,
+  1693→    spotPrice: state.spotPrice,
+  1694→    oiSummary: state.oiSummary,
+  1695→    tradeMode: state.tradeMode,
+  1696→    pendingSignals: state.pendingSignals,
+  1697→    brokerAccount: state.brokerAccount,
+  1698→  }),
+  1699→}
+  1700→)
+  1701→);
+  1702→

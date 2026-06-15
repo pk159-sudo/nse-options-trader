@@ -833,160 +833,7 @@ function checkIfMarketOpen(): boolean {
   }
 }
 
-// ===== Demo data helpers (shown when no real signals/trades exist) =====
-function getDemoSignals(expiry: string): TradingSignal[] {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: "sig-demo-bull-1",
-      time: "10:45:00",
-      createdAt: now,
-      fromStrike: 23800,
-      toStrike: 24000,
-      type: "BULLISH",
-      strength: 70,
-      reason: "PE OI support at 23800 → CALL BUY 24000",
-      entryPrice: 85.50,
-      oiChange: 125000,
-      expiry,
-      executed: true,
-      status: "EXECUTED",
-      tradeId: "trade-demo-bull-1",
-      brokerOrderId: "ORD001",
-      isRealTrade: false,
-    },
-    {
-      id: "sig-demo-bear-2",
-      time: "12:15:00",
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-      fromStrike: 24200,
-      toStrike: 24000,
-      type: "BEARISH",
-      strength: 65,
-      reason: "CE OI resistance at 24200 → PUT BUY 24000",
-      entryPrice: 120.00,
-      oiChange: 98000,
-      expiry,
-      executed: true,
-      status: "EXECUTED",
-      tradeId: "trade-demo-bear-2",
-      brokerOrderId: "ORD002",
-      isRealTrade: false,
-    },
-    {
-      id: "sig-demo-bull-3",
-      time: "14:02:00",
-      createdAt: now,
-      fromStrike: 23700,
-      toStrike: 23900,
-      type: "BULLISH",
-      strength: 55,
-      reason: "PE OI support at 23700 → CALL BUY 23900",
-      entryPrice: 142.30,
-      oiChange: 72000,
-      expiry,
-      executed: true,
-      status: "APPROVED",
-      tradeId: "trade-demo-bull-3",
-      isRealTrade: false,
-    },
-  ];
-}
 
-function getDemoTrades(expiry: string): Trade[] {
-  const now = new Date().toISOString();
-  // WIN: 24000 CE entry 85.50 → +50% target = 128.25
-  const winEntry = 85.50;
-  const winExit = winEntry * 1.50; // 128.25 — 50% target hit
-  const winPct = ((winExit - winEntry) / winEntry) * 100; // 50%
-  // LOSS: 24000 PE entry 120.00 → -15% stop loss = 102.00
-  const lossEntry = 120.00;
-  const lossExit = lossEntry * 0.85; // 102.00 — 15% SL hit
-  const lossPct = -15.0;
-  // OPEN: 23900 CE entry 142.30 — still running
-  const openEntry = 142.30;
-
-  return [
-    {
-      id: "trade-demo-bull-1",
-      time: "10:45:00",
-      createdAt: now,
-      signalType: "BULLISH",
-      strike: 24000,
-      entryPrice: winEntry,
-      exitPrice: winExit,
-      pnl: (winExit - winEntry) * 65,
-      status: "CLOSED",
-      currentStop: winExit,
-      highestProfitPct: winPct,
-      maxDrawdownPct: 3.5,
-      priceHistory: [
-        { time: "10:45:00", price: winEntry },
-        { time: "11:00:00", price: 92.00 },
-        { time: "11:15:00", price: 88.50 },
-        { time: "11:30:00", price: 105.00 },
-        { time: "11:45:00", price: 118.00 },
-        { time: "12:00:00", price: 125.80 },
-        { time: "12:15:00", price: winExit },
-      ],
-      expiry,
-      signalId: "sig-demo-bull-1",
-      isRealTrade: false,
-      brokerOrderId: "ORD001",
-    },
-    {
-      id: "trade-demo-bear-2",
-      time: "12:15:00",
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-      signalType: "BEARISH",
-      strike: 24000,
-      entryPrice: lossEntry,
-      exitPrice: lossExit,
-      pnl: (lossExit - lossEntry) * 65,
-      status: "CLOSED",
-      currentStop: lossExit,
-      highestProfitPct: 5.5,
-      maxDrawdownPct: Math.abs(lossPct),
-      priceHistory: [
-        { time: "12:15:00", price: lossEntry },
-        { time: "12:30:00", price: 115.00 },
-        { time: "12:45:00", price: 110.50 },
-        { time: "13:00:00", price: 107.00 },
-        { time: "13:15:00", price: 105.00 },
-        { time: "13:30:00", price: 103.50 },
-        { time: "13:45:00", price: lossExit },
-      ],
-      expiry,
-      signalId: "sig-demo-bear-2",
-      isRealTrade: false,
-      brokerOrderId: "ORD002",
-    },
-    {
-      id: "trade-demo-bull-3",
-      time: "14:02:00",
-      createdAt: now,
-      signalType: "BULLISH",
-      strike: 23900,
-      entryPrice: openEntry,
-      exitPrice: 0,
-      pnl: 0,
-      status: "OPEN",
-      currentStop: openEntry * 1.15, // SL moved to +15% lock (peak was >30%)
-      highestProfitPct: 42.1,
-      maxDrawdownPct: 8.3,
-      priceHistory: [
-        { time: "14:02:00", price: openEntry },
-        { time: "14:15:00", price: 155 },
-        { time: "14:30:00", price: 170 },
-        { time: "14:45:00", price: 188 },
-        { time: "15:00:00", price: 202.20 },
-      ],
-      expiry,
-      signalId: "sig-demo-bull-3",
-      isRealTrade: false,
-    },
-  ];
-}
 
 export const useNSEStore = create<NSEStore>()(
   persist(
@@ -1037,11 +884,6 @@ export const useNSEStore = create<NSEStore>()(
       // Load from disk first. If no data found, allow one NSE fetch
       // to download the latest closing data for this expiry week.
       const loaded = await loadFromDisk();
-      // After disk load, if still no signals/trades, show demo data for preview
-      const state = get();
-      if (state.signals.length === 0 && state.trades.length === 0) {
-        set({ signals: getDemoSignals(expiry), trades: getDemoTrades(expiry) });
-      }
       if (!loaded) {
         // No disk data for this expiry — trigger one fetch
         await get().fetchOptionChain();
@@ -1066,11 +908,6 @@ export const useNSEStore = create<NSEStore>()(
         // Load from disk. If no data found, trigger one NSE fetch
         // so user sees latest data even when opening off-market.
         const loaded = await loadFromDisk();
-        // After disk load, if still no signals/trades, show demo data
-        const state = get();
-        if (state.signals.length === 0 && state.trades.length === 0) {
-          set({ signals: getDemoSignals(expiryDates[0]), trades: getDemoTrades(expiryDates[0]) });
-        }
         if (!loaded) {
           void get().fetchOptionChain();
         }
@@ -1253,7 +1090,7 @@ export const useNSEStore = create<NSEStore>()(
               maxDrawdownPct: 0,
               priceHistory: [{ time: sig.time, price: sig.entryPrice }],
               signalId: sig.id,
-              isRealTrade: false,
+              isRealTrade: true,
             });
           } else {
             // SEMI_AUTO mode: add to pending queue for approval
