@@ -37,14 +37,8 @@ Thumbs.db
 
 # Data (JSON/JSONL files generated at runtime — never commit)
 # Keep .gitkeep files for directory structure
-data/snapshots/**
-!data/snapshots/**/.gitkeep
-data/delta-history/**
-!data/delta-history/**/.gitkeep
-data/signals/**
-!data/signals/**/.gitkeep
-data/trades/**
-!data/trades/**/.gitkeep
+data/**
+!data/**/.gitkeep
 
 # Prisma
 prisma/*.db

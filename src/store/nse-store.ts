@@ -1230,13 +1230,12 @@ export const useNSEStore = create<NSEStore>()(
 
   saveSignalToFile: async (signal) => {
     const { selectedExpiry } = get();
-    const expiry = signal.expiry || selectedExpiry;
-    if (!expiry) return;
+    if (!signal.expiry && !selectedExpiry) return;
     try {
-      await fetch(`/api/nse/signals?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
+      await fetch("/api/nse/signals?symbol=NIFTY", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(signal),
+        body: JSON.stringify({ ...signal, expiry: signal.expiry || selectedExpiry }),
       });
     } catch {
       // Ignore write failures
@@ -1266,13 +1265,12 @@ export const useNSEStore = create<NSEStore>()(
 
   saveTradeToFile: async (trade) => {
     const { selectedExpiry } = get();
-    const expiry = trade.expiry || selectedExpiry;
-    if (!expiry) return;
+    if (!trade.expiry && !selectedExpiry) return;
     try {
-      await fetch(`/api/nse/trades?symbol=NIFTY&expiry=${encodeURIComponent(expiry)}`, {
+      await fetch("/api/nse/trades?symbol=NIFTY", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(trade),
+        body: JSON.stringify({ ...trade, expiry: trade.expiry || selectedExpiry }),
       });
     } catch {
       // Ignore write failures

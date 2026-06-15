@@ -27,12 +27,13 @@ function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function getFilePath(symbol: string, expiry: string) {
-  return path.join(ROOT, safeName(symbol), safeName(expiry), "signals.jsonl");
+// Single file per symbol: data/signals/NIFTY/signals.jsonl (no expiry sub-dir)
+function getFilePath(symbol: string) {
+  return path.join(ROOT, safeName(symbol), "signals.jsonl");
 }
 
-async function ensureFile(symbol: string, expiry: string) {
-  const filePath = getFilePath(symbol, expiry);
+async function ensureFile(symbol: string) {
+  const filePath = getFilePath(symbol);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   try {
     await fs.access(filePath);
@@ -41,10 +42,10 @@ async function ensureFile(symbol: string, expiry: string) {
   }
 }
 
-async function readSignals(symbol: string, expiry: string): Promise<TradingSignal[]> {
+async function readAllSignals(symbol: string): Promise<TradingSignal[]> {
   try {
-    await ensureFile(symbol, expiry);
-    const filePath = getFilePath(symbol, expiry);
+    await ensureFile(symbol);
+    const filePath = getFilePath(symbol);
     const content = await fs.readFile(filePath, "utf-8");
     return content
       .split("\n")
@@ -67,13 +68,20 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const symbol = url.searchParams.get("symbol") || "";
   const expiry = url.searchParams.get("expiry") || "";
-  const limit = Number(url.searchParams.get("limit") || "10");
+  const limit = Number(url.searchParams.get("limit") || "20");
 
-  if (!symbol || !expiry) {
-    return NextResponse.json({ error: "symbol and expiry are required" }, { status: 400 });
+  if (!symbol) {
+    return NextResponse.json({ error: "symbol is required" }, { status: 400 });
   }
 
-  const records = await readSignals(symbol, expiry);
+  let records = await readAllSignals(symbol);
+
+  // Filter by expiry if provided
+  if (expiry) {
+    records = records.filter((s) => s.expiry === expiry);
+  }
+
+  // Deduplicate by id (latest wins)
   const latestById = new Map<string, TradingSignal>();
   for (const record of records) {
     latestById.set(record.id, record);
@@ -96,8 +104,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid signal payload or missing symbol" }, { status: 400 });
   }
 
-  await ensureFile(symbol, signal.expiry);
-  const filePath = getFilePath(symbol, signal.expiry);
+  await ensureFile(symbol);
+  const filePath = getFilePath(symbol);
   await fs.appendFile(filePath, `${JSON.stringify(signal)}\n`, "utf-8");
 
   return NextResponse.json({ success: true });
