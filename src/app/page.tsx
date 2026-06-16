@@ -35,6 +35,7 @@ import {
   Paperclip,
   Timer,
   TimerReset,
+  FlaskConical,
 } from "lucide-react";
 import {
   BarChart,
@@ -51,6 +52,7 @@ import { formatIndianNumber, formatPrice } from "@/lib/nse";
 import { OISummaryPanel } from "@/components/nse/oi-summary";
 import { SignalsPanel } from "@/components/nse/signals-panel";
 import { AccountConnector } from "@/components/nse/account-connector";
+import BacktestPanel from "@/components/nse/backtest-panel";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 
 // NIFTY only
@@ -862,6 +864,10 @@ export default function NSEOptionsTool() {
               <Eye className="h-4 w-4" />
               OI Charts
             </TabsTrigger>
+            <TabsTrigger value="backtest" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400 t-text-4 text-sm gap-1.5 py-2">
+              <FlaskConical className="h-4 w-4" />
+              Backtest
+            </TabsTrigger>
             <TabsTrigger value="account" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400 t-text-4 text-sm gap-1.5 py-2">
               <Building2 className="h-4 w-4" />
               Account
@@ -882,6 +888,10 @@ export default function NSEOptionsTool() {
 
           <TabsContent value="oi-chart">
             <OIAnalysisPanel />
+          </TabsContent>
+
+          <TabsContent value="backtest">
+            <BacktestPanel />
           </TabsContent>
 
           <TabsContent value="account">
