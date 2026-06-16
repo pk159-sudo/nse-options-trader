@@ -167,6 +167,8 @@ const INITIAL_STOP_PCT = 15;
 const BREAKEVEN_TRIGGER_PCT = 15;
 const PROFIT_LOCK_TRIGGER_PCT = 30;
 const TRAILING_STOP_PCT = 15;
+const TRAILING_STEP2_TRIGGER_PCT = 45;
+const TRAILING_STEP2_STOP_PCT = 30;
 
 function calculateOISummary(
   prevSnapshot: OISnapshot | null,
@@ -583,17 +585,22 @@ function checkExitConditions(
     }
 
     // 2. Stop loss ladder for buy positions:
+    //    - Initial SL: -15% below entry
     //    - Move SL to breakeven once price is up 15%
-    //    - Move SL to 15% profit once price is up 30%
+    //    - Lock 15% profit once price is up 30%
+    //    - Lock 30% profit once price is up 45%
     let stopPrice: number;
-    if (trade.highestProfitPct >= PROFIT_LOCK_TRIGGER_PCT) {
-      // Lock a 15% profit after 30% gain
+    if (trade.highestProfitPct >= TRAILING_STEP2_TRIGGER_PCT) {
+      // Step 4: Lock 30% profit after 45% gain
+      stopPrice = entry * (1 + TRAILING_STEP2_STOP_PCT / 100);
+    } else if (trade.highestProfitPct >= PROFIT_LOCK_TRIGGER_PCT) {
+      // Step 3: Lock 15% profit after 30% gain
       stopPrice = entry * (1 + TRAILING_STOP_PCT / 100);
     } else if (trade.highestProfitPct >= BREAKEVEN_TRIGGER_PCT) {
-      // Move stop to breakeven after 15% gain
+      // Step 2: Move stop to breakeven after 15% gain
       stopPrice = entry;
     } else {
-      // Initial stop loss 15% below entry
+      // Step 1: Initial stop loss 15% below entry
       stopPrice = entry * (1 - INITIAL_STOP_PCT / 100);
     }
 
@@ -1024,8 +1031,15 @@ export const useNSEStore = create<NSEStore>()(
         // Calculate OI Summary
         const oiSummary = calculateOISummary(prevSnapshot, currentChain, spotPrice, selectedExpiry);
 
+        // ===== Time Guard: No new entries after 3 PM =====
+        // Expiry day + after 3 PM = extreme OI decay, unreliable signals
+        // Non-expiry day + after 3 PM = reduced liquidity, avoid whipsaws
+        const istNow = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+        const istTime = new Date(istNow).getHours();
+        const isAfter3PM = istTime >= 15;
+
         // Scan signals using the simplified OI-reduction rule only
-        const newSignals = scanSignalsImproved(prevSnapshot, currentChain, spotPrice, selectedExpiry, oiThreshold);
+        const newSignals = isAfter3PM ? [] : scanSignalsImproved(prevSnapshot, currentChain, spotPrice, selectedExpiry, oiThreshold);
 
         for (const sig of newSignals) {
           void get().saveSignalToFile(sig);

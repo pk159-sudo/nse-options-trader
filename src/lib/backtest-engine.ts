@@ -561,6 +561,20 @@ function computeStats(trades: BacktestTrade[]): BacktestStats {
   };
 }
 
+// ===== Time Guards =====
+// After 3 PM: No new entries (OI drops heavily, unreliable signals)
+// Expiry day: No new entries after 3 PM (extreme OI decay)
+// Non-expiry day: No new entries after 3 PM (reduced liquidity)
+
+function isAfterEntryCutoff(timeStr: string): boolean {
+  // timeStr: "HH:MM:SS" or "HH:MM"
+  const parts = timeStr.split(":");
+  const hour = parseInt(parts[0], 10);
+  const minute = parseInt(parts[1], 10);
+  // Cutoff: 15:00 (3 PM) — block entries at or after 3 PM
+  return hour >= 15;
+}
+
 // ===== Main Backtest Runner =====
 
 export async function runBacktest(
@@ -618,7 +632,9 @@ export async function runBacktest(
       openTrades = stillOpen;
 
       // Generate signals (only if we have a previous snapshot and capacity)
-      if (prevSnapshot && openTrades.length < cfg.maxOpenTrades) {
+      // Time guard: No new entries after 3 PM (expiry or non-expiry)
+      const canEnterNew = !isAfterEntryCutoff(snapshot.time);
+      if (prevSnapshot && openTrades.length < cfg.maxOpenTrades && canEnterNew) {
         const signal = scanSignals(prevSnapshot, snapshot, cfg.oiThreshold);
 
         if (signal) {
@@ -702,6 +718,9 @@ export async function runBacktest(
   }));
 
   const stats = computeStats(outputTrades);
+
+  // Count how many signals were blocked by time guard
+  // (for debugging — we can add this as a stat later)
 
   return {
     stats,

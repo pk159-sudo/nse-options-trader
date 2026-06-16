@@ -405,13 +405,14 @@ export default function BacktestPanel() {
           )}
 
           {/* Strategy Info */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
             {[
               { label: "Engine", value: "OI Unwind", color: "text-emerald-400" },
               { label: "Bullish", value: "CE OI↓ → CALL +200", color: "text-emerald-400" },
               { label: "Bearish", value: "PE OI↓ → PUT -200", color: "text-red-400" },
-              { label: "Target", value: "50% (Trailing)", color: "text-emerald-400" },
-              { label: "Stop Loss", value: "-15% / BE / +15%", color: "text-amber-400" },
+              { label: "Target", value: "50% (4-Step Trail)", color: "text-emerald-400" },
+              { label: "Stop Loss", value: "-15%/BE/+15%/+30%", color: "text-amber-400" },
+              { label: "Entry Guard", value: "No new after 3 PM", color: "text-red-400" },
             ].map((s) => (
               <div key={s.label} className="t-bg-subtle rounded-lg p-1.5 text-center">
                 <p className="text-[9px] t-text-6">{s.label}</p>
