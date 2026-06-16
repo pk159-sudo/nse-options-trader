@@ -1,0 +1,1476 @@
+    60→  daysToExpiry: number;
+    61→  expiryDates: string[];
+    62→  selectedExpiry: string;
+    63→  chainData: OptionData[];
+    64→  analysis: AnalysisData | null;
+    65→  oiByStrike: OIByStrike[];
+    66→}
+    67→
+    68→// ===== Snapshot for OI Delta =====
+    69→export interface OISnapshot {
+    70→  timestamp: string;
+    71→  expiry: string;
+    72→  spotPrice: number;
+    73→  strikes: {
+    74→    strike: number;
+    75→    ceOI: number;
+    76→    peOI: number;
+    77→    ceLTP: number;
+    78→    peLTP: number;
+    79→  }[];
+    80→}
+    81→
+    82→// ===== OI Summary =====
+    83→export interface OIStrikeRow {
+    84→  strike: number;
+    85→  oiChange: number;
+    86→  oiCurrent: number;
+    87→}
+    88→
+    89→export interface OISummaryData {
+    90→  callIncrease: OIStrikeRow[];  // top 3
+    91→  putIncrease: OIStrikeRow[];
+    92→  callDecrease: OIStrikeRow[];
+    93→  putDecrease: OIStrikeRow[];
+    94→  ceTotalChange: number;
+    95→  peTotalChange: number;
+    96→  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
+    97→  atmStrike: number;
+    98→  dataRange: string;
+    99→  lastUpdated: string;
+   100→}
+   101→
+   102→// ===== Signals =====
+   103→export interface TradingSignal {
+   104→  id: string;
+   105→  time: string;
+   106→  createdAt: string;
+   107→  fromStrike: number;
+   108→  toStrike: number;
+   109→  type: "BULLISH" | "BEARISH";
+   110→  strength: number;
+   111→  reason: string;
+   112→  entryPrice: number;
+   113→  oiChange: number;
+   114→  expiry: string;
+   115→  tradeId?: string;
+   116→  executed: boolean;
+   117→  skipReason?: string;
+   118→  // Semi-auto fields
+   119→  status: "PENDING" | "APPROVED" | "REJECTED" | "EXECUTED";
+   120→  brokerOrderId?: string;
+   121→  isRealTrade?: boolean;
+   122→}
+   123→
+   124→// ===== Trades =====
+   125→export interface Trade {
+   126→  id: string;
+   127→  time: string;
+   128→  createdAt: string;
+   129→  signalType: "BULLISH" | "BEARISH";
+   130→  strike: number;
+   131→  entryPrice: number;
+   132→  exitPrice: number;
+   133→  pnl: number;
+   134→  status: "OPEN" | "CLOSED";
+   135→  currentStop: number;
+   136→  highestProfitPct: number;
+   137→  maxDrawdownPct: number;
+   138→  priceHistory: { time: string; price: number }[];
+   139→  expiry: string;
+   140→  signalId?: string;
+   141→  // Broker fields
+   142→  isRealTrade?: boolean;
+   143→  brokerOrderId?: string;
+   144→  brokerName?: string;
+   145→}
+   146→
+   147→// ===== Broker Types =====
+   148→export type BrokerName = "ZERODHA" | "ANGEL_ONE" | "UPSTOX" | "DHAN" | "GROWW";
+   149→
+   150→export interface BrokerAccount {
+   151→  broker: BrokerName;
+   152→  apiKey: string;
+   153→  apiSecret: string;
+   154→  accessToken: string;
+   155→  status: "CONNECTED" | "DISCONNECTED";
+   156→  balance: number;
+   157→  connectedAt: string | null;
+   158→  userId?: string;
+   159→}
+   160→
+   161→export type TradeMode = "PAPER" | "SEMI_AUTO";
+   162→
+   163→const LOT_SIZES: Record<string, number> = { NIFTY: 65 };
+   164→const LOT_SIZE = 65;
+   165→const PROFIT_TARGET_PCT = 50;
+   166→const INITIAL_STOP_PCT = 15;
+   167→const BREAKEVEN_TRIGGER_PCT = 15;
+   168→const PROFIT_LOCK_TRIGGER_PCT = 30;
+   169→const TRAILING_STOP_PCT = 15;
+   170→
+   171→function calculateOISummary(
+   172→  prevSnapshot: OISnapshot | null,
+   173→  currentChain: OptionData[],
+   174→  spotPrice: number,
+   175→  expiry: string
+   176→): OISummaryData | null {
+   177→  if (!prevSnapshot || !currentChain.length) return null;
+   178→
+   179→  const atm = Math.round(spotPrice / 50) * 50;
+   180→
+   181→  // Determine range based on days to expiry
+   182→  let range = 500;
+   183→  try {
+   184→    const expDate = new Date(expiry);
+   185→    const daysToExpiry = Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+   186→    if (daysToExpiry <= 7) range = 300;
+   187→  } catch {}
+   188→
+   189→  // Build current OI map
+   190→  const currentMap = new Map<number, { ceOI: number; peOI: number }>();
+   191→  for (const item of currentChain) {
+   192→    currentMap.set(item.strikePrice, {
+   193→      ceOI: item.CE?.openInterest || 0,
+   194→      peOI: item.PE?.openInterest || 0,
+   195→    });
+   196→  }
+   197→
+   198→  // Build prev OI map
+   199→  const prevMap = new Map<number, { ceOI: number; peOI: number }>();
+   200→  for (const s of prevSnapshot.strikes) {
+   201→    prevMap.set(s.strike, { ceOI: s.ceOI, peOI: s.peOI });
+   202→  }
+   203→
+   204→  // Calculate changes for relevant strikes
+   205→  const relevantStrikes: {
+   206→    strike: number;
+   207→    ceOIChange: number;
+   208→    peOIChange: number;
+   209→    ceOICurrent: number;
+   210→    peOICurrent: number;
+   211→  }[] = [];
+   212→
+   213→  for (const [strike, curr] of currentMap) {
+   214→    if (strike < atm - range || strike > atm + range) continue;
+   215→    const prev = prevMap.get(strike);
+   216→    if (!prev) continue;
+   217→
+   218→    const ceOIChange = curr.ceOI - prev.ceOI;
+   219→    const peOIChange = curr.peOI - prev.peOI;
+   220→
+   221→    if (ceOIChange !== 0 || peOIChange !== 0) {
+   222→      relevantStrikes.push({
+   223→        strike,
+   224→        ceOIChange,
+   225→        peOIChange,
+   226→        ceOICurrent: curr.ceOI,
+   227→        peOICurrent: curr.peOI,
+   228→      });
+   229→    }
+   230→  }
+   231→
+   232→  if (relevantStrikes.length === 0) return null;
+   233→
+   234→  // Sort and pick top 3
+   235→  const ceIncreases = relevantStrikes
+   236→    .filter((s) => s.ceOIChange > 0)
+   237→    .sort((a, b) => b.ceOIChange - a.ceOIChange)
+   238→    .slice(0, 3)
+   239→    .map((s) => ({ strike: s.strike, oiChange: s.ceOIChange, oiCurrent: s.ceOICurrent }));
+   240→
+   241→  const peIncreases = relevantStrikes
+   242→    .filter((s) => s.peOIChange > 0)
+   243→    .sort((a, b) => b.peOIChange - a.peOIChange)
+   244→    .slice(0, 3)
+   245→    .map((s) => ({ strike: s.strike, oiChange: s.peOIChange, oiCurrent: s.peOICurrent }));
+   246→
+   247→  const ceDecreases = relevantStrikes
+   248→    .filter((s) => s.ceOIChange < 0)
+   249→    .sort((a, b) => a.ceOIChange - b.ceOIChange)
+   250→    .slice(0, 3)
+   251→    .map((s) => ({ strike: s.strike, oiChange: s.ceOIChange, oiCurrent: s.ceOICurrent }));
+   252→
+   253→  const peDecreases = relevantStrikes
+   254→    .filter((s) => s.peOIChange < 0)
+   255→    .sort((a, b) => a.peOIChange - b.peOIChange)
+   256→    .slice(0, 3)
+   257→    .map((s) => ({ strike: s.strike, oiChange: s.peOIChange, oiCurrent: s.peOICurrent }));
+   258→
+   259→  const ceTotalChange = relevantStrikes.reduce((sum, s) => sum + s.ceOIChange, 0);
+   260→  const peTotalChange = relevantStrikes.reduce((sum, s) => sum + s.peOIChange, 0);
+   261→
+   262→  let sentiment: "BULLISH" | "BEARISH" | "NEUTRAL" = "NEUTRAL";
+   263→  if (ceTotalChange > 0 && peTotalChange < 0) sentiment = "BEARISH";
+   264→  else if (peTotalChange > 0 && ceTotalChange < 0) sentiment = "BULLISH";
+   265→
+   266→  return {
+   267→    callIncrease: ceIncreases,
+   268→    putIncrease: peIncreases,
+   269→    callDecrease: ceDecreases,
+   270→    putDecrease: peDecreases,
+   271→    ceTotalChange,
+   272→    peTotalChange,
+   273→    sentiment,
+   274→    atmStrike: atm,
+   275→    dataRange: `±${range}`,
+   276→    lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
+   277→  };
+   278→}
+   279→
+   280→function getOptionLTP(
+   281→  currentMap: Map<number, { ceLTP: number; peLTP: number }>,
+   282→  strike: number,
+   283→  optionType: "CE" | "PE"
+   284→): number | null {
+   285→  const item = currentMap.get(strike);
+   286→  if (!item) return null;
+   287→  return optionType === "CE" ? item.ceLTP : item.peLTP;
+   288→}
+   289→
+   290→function findNearestStrike(
+   291→  currentMap: Map<number, { ceLTP: number; peLTP: number }>,
+   292→  target: number,
+   293→  direction: "up" | "down"
+   294→): number | null {
+   295→  const strikes = Array.from(currentMap.keys()).sort((a, b) => a - b);
+   296→  if (direction === "up") {
+   297→    return strikes.find((s) => s >= target) ?? null;
+   298→  }
+   299→  return strikes.reverse().find((s) => s <= target) ?? null;
+   300→}
+   301→
+   302→function scanSignalsImproved(
+   303→  prevSnapshot: OISnapshot | null,
+   304→  currentChain: OptionData[],
+   305→  spotPrice: number,
+   306→  expiry: string,
+   307→  threshold: number
+   308→): TradingSignal[] {
+   309→  // ===== SIMPLIFIED BUY-ONLY SIGNAL ENGINE =====
+   310→  // Logic: OI data se pata chal jayega market kis side shift ho raha hai
+   311→  // BULLISH (OI shift upar) → CALL BUY at (shift strike + 200)
+   312→  // BEARISH (OI shift neeche) → PUT BUY at (shift strike - 200)
+   313→  // Sirf BUY karna hai — no selling, no shorting
+   314→
+   315→  if (!prevSnapshot || !currentChain.length) return [];
+   316→
+   317→  const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
+   318→
+   319→  const prevMap = new Map<number, { ceOI: number; peOI: number }>();
+   320→  for (const s of prevSnapshot.strikes) {
+   321→    prevMap.set(s.strike, { ceOI: s.ceOI, peOI: s.peOI });
+   322→  }
+   323→
+   324→  const currentMap = new Map<number, { ceOI: number; ceLTP: number; peOI: number; peLTP: number }>();
+   325→  for (const item of currentChain) {
+   326→    currentMap.set(item.strikePrice, {
+   327→      ceOI: item.CE?.openInterest || 0,
+   328→      ceLTP: item.CE?.lastPrice || 0,
+   329→      peOI: item.PE?.openInterest || 0,
+   330→      peLTP: item.PE?.lastPrice || 0,
+   331→    });
+   332→  }
+   333→
+   334→  // Calculate CE & PE OI changes for all strikes
+   335→  const oiChanges: { strike: number; ceChange: number; peChange: number; ceLTP: number; peLTP: number }[] = [];
+   336→  for (const [strike, curr] of currentMap) {
+   337→    const prev = prevMap.get(strike);
+   338→    if (!prev) continue;
+   339→    const ceChange = curr.ceOI - prev.ceOI;
+   340→    const peChange = curr.peOI - prev.peOI;
+   341→    oiChanges.push({ strike, ceChange, peChange, ceLTP: curr.ceLTP, peLTP: curr.peLTP });
+   342→  }
+   343→
+   344→  const atm = Math.round(spotPrice / 50) * 50;
+   345→
+   346→  // Filter to relevant window: ATM ± 200
+   347→  const relevant = oiChanges.filter(
+   348→    (c) => c.strike >= atm - 200 && c.strike <= atm + 200
+   349→  );
+   350→
+   351→  const callCandidates = relevant
+   352→    .filter((c) => c.ceChange < -threshold)
+   353→    .map((c) => {
+   354→      const toStrike = findNearestStrike(currentMap, c.strike + 200, "up");
+   355→      return toStrike
+   356→        ? {
+   357→            type: "BULLISH" as const,
+   358→            fromStrike: c.strike,
+   359→            toStrike,
+   360→            change: Math.abs(c.ceChange),
+   361→            entryPrice: getOptionLTP(currentMap, toStrike, "CE") || 0,
+   362→          }
+   363→        : null;
+   364→    })
+   365→    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+   366→    .filter((candidate) => candidate.entryPrice > 0);
+   367→
+   368→  const putCandidates = relevant
+   369→    .filter((c) => c.peChange < -threshold)
+   370→    .map((c) => {
+   371→      const toStrike = findNearestStrike(currentMap, c.strike - 200, "down");
+   372→      return toStrike
+   373→        ? {
+   374→            type: "BEARISH" as const,
+   375→            fromStrike: c.strike,
+   376→            toStrike,
+   377→            change: Math.abs(c.peChange),
+   378→            entryPrice: getOptionLTP(currentMap, toStrike, "PE") || 0,
+   379→          }
+   380→        : null;
+   381→    })
+   382→    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+   383→    .filter((candidate) => candidate.entryPrice > 0);
+   384→
+   385→  const candidates = [...callCandidates, ...putCandidates];
+   386→  if (candidates.length === 0) return [];
+   387→
+   388→  candidates.sort((a, b) => b.change - a.change);
+   389→  const best = candidates[0];
+   390→  const reason = best.type === "BULLISH"
+   391→    ? `CE OI reduction at ${best.fromStrike} → CALL BUY ${best.toStrike}`
+   392→    : `PE OI reduction at ${best.fromStrike} → PUT BUY ${best.toStrike}`;
+   393→  const strength = Math.min(90, 50 + (best.change / threshold) * 10);
+   394→
+   395→  return [
+   396→    {
+   397→      id: `sig-${Date.now()}-${best.type.toLowerCase()}-1`,
+   398→      time: now,
+   399→      fromStrike: best.fromStrike,
+   400→      toStrike: best.toStrike,
+   401→      type: best.type,
+   402→      strength: Math.min(95, Math.max(50, Math.round(strength * 10) / 10)),
+   403→      reason,
+   404→      entryPrice: best.entryPrice,
+   405→      oiChange: best.change,
+   406→      expiry,
+   407→      executed: false,
+   408→      status: "PENDING" as const,
+   409→    },
+   410→  ];
+   411→}
+   412→
+   413→function scanSignalsFallback(
+   414→  currentChain: OptionData[],
+   415→  spotPrice: number,
+   416→  expiry: string
+   417→): TradingSignal[] {
+   418→  // ===== FALLBACK SIGNAL ENGINE (BUY ONLY) =====
+   419→  // Jab migration data na ho, OI concentration se signals generate karo
+   420→  // Max CE OI → resistance → BEARISH → PUT BUY at (strike - 200)
+   421→  // Max PE OI → support → BULLISH → CALL BUY at (strike + 200)
+   422→  const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
+   423→  const atm = Math.round(spotPrice / 50) * 50;
+   424→  const currentMap = new Map<number, { ceLTP: number; peLTP: number }>();
+   425→  for (const item of currentChain) {
+   426→    currentMap.set(item.strikePrice, {
+   427→      ceLTP: item.CE?.lastPrice || 0,
+   428→      peLTP: item.PE?.lastPrice || 0,
+   429→    });
+   430→  }
+   431→
+   432→  // Find strikes within ±150 of ATM
+   433→  const win = currentChain.filter(
+   434→    (item) => item.strikePrice >= atm - 150 && item.strikePrice <= atm + 150
+   435→  );
+   436→  if (win.length === 0) return [];
+   437→
+   438→  const signals: TradingSignal[] = [];
+   439→
+   440→  // Find max CE OI → resistance zone → BEARISH → PUT BUY
+   441→  let maxCEIdx = 0;
+   442→  let maxCEOI = 0;
+   443→  for (let i = 0; i < win.length; i++) {
+   444→    const ceOI = win[i].CE?.openInterest || 0;
+   445→    if (ceOI > maxCEOI) {
+   446→      maxCEOI = ceOI;
+   447→      maxCEIdx = i;
+   448→    }
+   449→  }
+   450→
+   451→  // Find max PE OI → support zone → BULLISH → CALL BUY
+   452→  let maxPEIdx = 0;
+   453→  let maxPEOI = 0;
+   454→  for (let i = 0; i < win.length; i++) {
+   455→    const peOI = win[i].PE?.openInterest || 0;
+   456→    if (peOI > maxPEOI) {
+   457→      maxPEOI = peOI;
+   458→      maxPEIdx = i;
+   459→    }
+   460→  }
+   461→
+   462→  const dominanceRatio = Math.abs(maxCEOI - maxPEOI) / Math.max(maxCEOI, maxPEOI, 1);
+   463→  const preferBear = maxCEOI >= maxPEOI;
+   464→  let signalCreated = false;
+   465→
+   466→  const tryBear = () => {
+   467→    if (maxCEOI <= 0) return false;
+   468→    const ceStrike = win[maxCEIdx].strikePrice;
+   469→    const putBuyStrike = ceStrike - 200;
+   470→    const putLTP = getOptionLTP(currentMap, putBuyStrike, "PE");
+   471→    if (!putLTP || putLTP <= 0) return false;
+   472→    signals.push({
+   473→      id: `sig-${Date.now()}-fbear`,
+   474→      time: now,
+   475→      createdAt: new Date().toISOString(),
+   476→      fromStrike: ceStrike,
+   477→      toStrike: putBuyStrike,
+   478→      type: "BEARISH",
+   479→      strength: 60.0,
+   480→      reason: `CE OI resistance at ${ceStrike} → PUT BUY ${putBuyStrike}`,
+   481→      entryPrice: putLTP,
+   482→      oiChange: 0,
+   483→      expiry,
+   484→      executed: false,
+   485→      status: "PENDING" as const,
+   486→    });
+   487→    return true;
+   488→  };
+   489→
+   490→  const tryBull = () => {
+   491→    if (maxPEOI <= 0) return false;
+   492→    const peStrike = win[maxPEIdx].strikePrice;
+   493→    const callBuyStrike = peStrike + 200;
+   494→    const callLTP = getOptionLTP(currentMap, callBuyStrike, "CE");
+   495→    if (!callLTP || callLTP <= 0) return false;
+   496→    signals.push({
+   497→      id: `sig-${Date.now()}-fbull`,
+   498→      time: now,
+   499→      createdAt: new Date().toISOString(),
+   500→      fromStrike: peStrike,
+   501→      toStrike: callBuyStrike,
+   502→      type: "BULLISH",
+   503→      strength: 65.0,
+   504→      reason: `PE OI support at ${peStrike} → CALL BUY ${callBuyStrike}`,
+   505→      entryPrice: callLTP,
+   506→      oiChange: 0,
+   507→      expiry,
+   508→      executed: false,
+   509→      status: "PENDING" as const,
+   510→    });
+   511→    return true;
+   512→  };
+   513→
+   514→  if (dominanceRatio >= 0.08) {
+   515→    signalCreated = preferBear ? tryBear() : tryBull();
+   516→  }
+   517→
+   518→  if (!signalCreated) {
+   519→    signalCreated = preferBear ? tryBear() : tryBull();
+   520→    if (!signalCreated) {
+   521→      signalCreated = preferBear ? tryBull() : tryBear();
+   522→    }
+   523→  }
+   524→
+   525→  return signals;
+   526→}
+   527→
+   528→function checkExitConditions(
+   529→  currentChain: OptionData[],
+   530→  openTrades: Trade[]
+   531→): Trade[] {
+   532→  const updated = openTrades.map((t) => ({ ...t, priceHistory: [...t.priceHistory] }));
+   533→  let changed = false;
+   534→
+   535→  const currentMap = new Map<number, { ceLTP: number; peLTP: number }>();
+   536→  for (const item of currentChain) {
+   537→    currentMap.set(item.strikePrice, {
+   538→      ceLTP: item.CE?.lastPrice || 0,
+   539→      peLTP: item.PE?.lastPrice || 0,
+   540→    });
+   541→  }
+   542→
+   543→  const now = new Date().toLocaleTimeString("en-IN", { hour12: false });
+   544→
+   545→  for (let i = 0; i < updated.length; i++) {
+   546→    const trade = updated[i];
+   547→    if (trade.status !== "OPEN") continue;
+   548→
+   549→    const data = currentMap.get(trade.strike);
+   550→    if (!data) continue;
+   551→
+   552→    // BULLISH = CALL BUY → track CE LTP (profit when CE price rises)
+   553→    // BEARISH = PUT BUY → track PE LTP (profit when PE price rises)
+   554→    // Both are BUY positions — profit when bought option price increases
+   555→    const currentPrice = trade.signalType === "BULLISH" ? data.ceLTP : data.peLTP;
+   556→    if (currentPrice <= 0) continue;
+   557→
+   558→    const entry = trade.entryPrice;
+   559→    // Both CALL BUY and PUT BUY: profit = (current - entry) / entry
+   560→    // Because we BUY the option, profit increases when option price goes up
+   561→    const profitPct = ((currentPrice - entry) / entry) * 100;
+   562→
+   563→    // Track price history for the trade
+   564→    trade.priceHistory.push({ time: now, price: currentPrice });
+   565→    if (trade.priceHistory.length > 200) trade.priceHistory = trade.priceHistory.slice(-200);
+   566→
+   567→    // Track highest profit and max drawdown
+   568→    if (profitPct > trade.highestProfitPct) {
+   569→      trade.highestProfitPct = profitPct;
+   570→    }
+   571→    if (profitPct < 0 && Math.abs(profitPct) > trade.maxDrawdownPct) {
+   572→      trade.maxDrawdownPct = Math.abs(profitPct);
+   573→    }
+   574→
+   575→    // 1. Profit target 50%
+   576→    if (profitPct >= PROFIT_TARGET_PCT) {
+   577→      trade.exitPrice = currentPrice;
+   578→      // Both CALL BUY and PUT BUY: PnL = (current - entry) * lot_size
+   579→      trade.pnl = (currentPrice - entry) * LOT_SIZE;
+   580→      trade.status = "CLOSED";
+   581→      changed = true;
+   582→      continue;
+   583→    }
+   584→
+   585→    // 2. Stop loss ladder for buy positions:
+   586→    //    - Move SL to breakeven once price is up 15%
+   587→    //    - Move SL to 15% profit once price is up 30%
+   588→    let stopPrice: number;
+   589→    if (trade.highestProfitPct >= PROFIT_LOCK_TRIGGER_PCT) {
+   590→      // Lock a 15% profit after 30% gain
+   591→      stopPrice = entry * (1 + TRAILING_STOP_PCT / 100);
+   592→    } else if (trade.highestProfitPct >= BREAKEVEN_TRIGGER_PCT) {
+   593→      // Move stop to breakeven after 15% gain
+   594→      stopPrice = entry;
+   595→    } else {
+   596→      // Initial stop loss 15% below entry
+   597→      stopPrice = entry * (1 - INITIAL_STOP_PCT / 100);
+   598→    }
+   599→
+   600→    trade.currentStop = stopPrice;
+   601→
+   602→    // Check if stop triggered (buy position → price drops below stop)
+   603→    if (currentPrice <= stopPrice) {
+   604→      trade.exitPrice = currentPrice;
+   605→      trade.pnl = (currentPrice - entry) * LOT_SIZE;
+   606→      trade.status = "CLOSED";
+   607→      changed = true;
+   608→    }
+   609→  }
+   610→
+   611→  return changed ? updated : openTrades;
+   612→}
+   613→
+   614→interface NSEStore {
+   615→  // selectedSymbol removed — NIFTY only
+   616→  selectedExpiry: string;
+   617→  expiryDates: string[];
+   618→  optionChain: OptionChainState | null;
+   619→  isLoading: boolean;
+   620→  isExpiryLoading: boolean;
+   621→  error: string | null;
+   622→  autoRefresh: boolean;
+   623→  refreshInterval: number;
+   624→  lastUpdated: string | null;
+   625→
+   626→  // Snapshot history
+   627→  snapshots: OISnapshot[];
+   628→  maxSnapshots: number;
+   629→
+   630→  // OI Summary
+   631→  oiSummary: OISummaryData | null;
+   632→
+   633→  // Signals
+   634→  signals: TradingSignal[];
+   635→  oiThreshold: number;
+   636→
+   637→  // Trades
+   638→  trades: Trade[];
+   639→
+   640→  // Spot price from latest data
+   641→  spotPrice: number;
+   642→
+   643→  // Snapshot-based OI Delta per strike (like Python's get_delta)
+   644→  snapshotDelta: Record<number, { ceOIChange: number; peOIChange: number; ceLTPChange: number; peLTPChange: number }>;
+   645→  snapshotDeltaTime: string | null;
+   646→
+   647→  // Semi-auto trading
+   648→  tradeMode: TradeMode;
+   649→  pendingSignals: TradingSignal[];
+   650→  brokerAccount: BrokerAccount | null;
+   651→
+   652→  // setSymbol removed — NIFTY only
+   653→  setExpiry: (expiry: string) => void;
+   654→  setAutoRefresh: (val: boolean) => void;
+   655→  setRefreshInterval: (seconds: number) => void;
+   656→  setOIThreshold: (threshold: number) => void;
+   657→  fetchExpiryDates: () => Promise<void>;
+   658→  fetchOptionChain: (forceRefresh?: boolean) => Promise<void>;
+   659→  saveSnapshotToCsv: (snapshot: OISnapshot) => Promise<OISnapshot[] | null>;
+   660→  loadSnapshotHistory: () => Promise<void>;
+   661→  saveSignalToFile: (signal: TradingSignal) => Promise<void>;
+   662→  loadSignalsFromFile: () => Promise<void>;
+   663→  saveTradeToFile: (trade: Trade) => Promise<void>;
+   664→  loadTradesFromFile: () => Promise<void>;
+   665→  saveDeltaToFile: (prevTimestamp: string) => Promise<void>;
+   666→  loadDeltaFromFile: () => Promise<void>;
+   667→  isMarketOpen: boolean;
+   668→  checkMarketHours: () => void;
+   669→
+   670→  // Semi-auto trading methods
+   671→  setTradeMode: (mode: TradeMode) => void;
+   672→  approveSignal: (signalId: string) => void;
+   673→  rejectSignal: (signalId: string) => void;
+   674→  closeTrade: (tradeId: string) => void;
+   675→  closeAllTrades: () => void;
+   676→  connectBroker: (account: BrokerAccount) => void;
+   677→  disconnectBroker: () => void;
+   678→  updateBrokerBalance: (balance: number) => void;
+   679→}
+   680→
+   681→// Reconstruct optionChain state from a saved snapshot (for off-market / expiry-switch viewing)
+   682→// Snapshot stores only OI + LTP per strike, so other fields (IV, volume, changeOI) will be 0.
+   683→// This is intentional — off-market data is historical, not live.
+   684→function reconstructOptionChainFromSnapshot(
+   685→  snapshot: OISnapshot,
+   686→  symbol: string
+   687→): OptionChainState {
+   688→  const chainData: OptionData[] = snapshot.strikes.map((s) => ({
+   689→    strikePrice: s.strike,
+   690→    CE: {
+   691→      strikePrice: s.strike,
+   692→      openInterest: s.ceOI,
+   693→      lastPrice: s.ceLTP,
+   694→      expiryDate: snapshot.expiry,
+   695→      underlyingValue: snapshot.spotPrice,
+   696→      changeinOpenInterest: 0,
+   697→      totalTradedVolume: 0,
+   698→      impliedVolatility: 0,
+   699→      change: 0,
+   700→      pChange: 0,
+   701→      bidQty: 0,
+   702→      bidprice: 0,
+   703→      askQty: 0,
+   704→      askPrice: 0,
+   705→    },
+   706→    PE: {
+   707→      strikePrice: s.strike,
+   708→      openInterest: s.peOI,
+   709→      lastPrice: s.peLTP,
+   710→      expiryDate: snapshot.expiry,
+   711→      underlyingValue: snapshot.spotPrice,
+   712→      changeinOpenInterest: 0,
+   713→      totalTradedVolume: 0,
+   714→      impliedVolatility: 0,
+   715→      change: 0,
+   716→      pChange: 0,
+   717→      bidQty: 0,
+   718→      bidprice: 0,
+   719→      askQty: 0,
+   720→      askPrice: 0,
+   721→    },
+   722→  }));
+   723→
+   724→  // Basic analysis from snapshot data
+   725→  const totalCEOI = chainData.reduce((sum, item) => sum + (item.CE?.openInterest || 0), 0);
+   726→  const totalPEOI = chainData.reduce((sum, item) => sum + (item.PE?.openInterest || 0), 0);
+   727→  const pcr = totalCEOI > 0 ? totalPEOI / totalCEOI : 0;
+   728→
+   729→  // Max CE/PE OI strikes for support/resistance
+   730→  let maxCEOI = { strike: 0, oi: 0 };
+   731→  let maxPEOI = { strike: 0, oi: 0 };
+   732→  for (const item of chainData) {
+   733→    const ceOI = item.CE?.openInterest || 0;
+   734→    const peOI = item.PE?.openInterest || 0;
+   735→    if (ceOI > maxCEOI.oi) maxCEOI = { strike: item.strikePrice, oi: ceOI };
+   736→    if (peOI > maxPEOI.oi) maxPEOI = { strike: item.strikePrice, oi: peOI };
+   737→  }
+   738→
+   739→  const atmStrike = Math.round(snapshot.spotPrice / 50) * 50;
+   740→  const expiryDate = new Date(snapshot.expiry);
+   741→  const today = new Date(new Date().toISOString().split("T")[0]);
+   742→  const daysToExpiry = Math.max(0, Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+   743→
+   744→  return {
+   745→    spotPrice: snapshot.spotPrice,
+   746→    timestamp: snapshot.timestamp,
+   747→    atmStrike,
+   748→    daysToExpiry,
+   749→    expiryDates: [],
+   750→    selectedExpiry: snapshot.expiry,
+   751→    chainData,
+   752→    analysis: {
+   753→      pcr: Math.round(pcr * 100) / 100,
+   754→      maxPain: 0,
+   755→      totalCEOI,
+   756→      totalPEOI,
+   757→      totalCEVolume: 0,
+   758→      totalPEVolume: 0,
+   759→      maxCEOI,
+   760→      maxPEOI,
+   761→      maxCEChangeOI: { strike: 0, change: 0 },
+   762→      maxPEChangeOI: { strike: 0, change: 0 },
+   763→      resistance: maxCEOI.strike,
+   764→      support: maxPEOI.strike,
+   765→    },
+   766→    oiByStrike: chainData.map((item) => ({
+   767→      strike: item.strikePrice,
+   768→      ceOI: item.CE?.openInterest || 0,
+   769→      peOI: item.PE?.openInterest || 0,
+   770→      ceChangeOI: 0,
+   771→      peChangeOI: 0,
+   772→      ceVolume: 0,
+   773→      peVolume: 0,
+   774→      ceIV: 0,
+   775→      peIV: 0,
+   776→    })),
+   777→  };
+   778→}
+   779→
+   780→// Load last snapshot from disk and reconstruct optionChain (off-market / expiry switch)
+   781→// Returns true if optionChain was reconstructed, false if no snapshot found
+   782→async function loadFromDisk(): Promise<boolean> {
+   783→  try {
+   784→    const state = useNSEStore.getState();
+   785→    if (!state.selectedExpiry) return false;
+   786→
+   787→    // Load disk files (snapshots, signals, trades, delta)
+   788→    await Promise.all([
+   789→      state.loadSnapshotHistory(),
+   790→      state.loadSignalsFromFile(),
+   791→      state.loadTradesFromFile(),
+   792→      state.loadDeltaFromFile(),
+   793→    ]);
+   794→
+   795→    // Get fresh state after disk load
+   796→    const updated = useNSEStore.getState();
+   797→    if (updated.snapshots.length > 0) {
+   798→      const latestSnapshot = updated.snapshots[updated.snapshots.length - 1];
+   799→      const reconstructed = reconstructOptionChainFromSnapshot(latestSnapshot, "NIFTY");
+   800→      useNSEStore.setState({
+   801→        optionChain: reconstructed,
+   802→        lastUpdated: new Date(latestSnapshot.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
+   803→        spotPrice: latestSnapshot.spotPrice,
+   804→        isLoading: false,
+   805→      });
+   806→      return true;
+   807→    }
+   808→  } catch {
+   809→    // Ignore disk read failures
+   810→  }
+   811→  return false;
+   812→}
+   813→
+   814→// Market hours helper: 9:15 AM - 3:30 PM IST, Mon-Fri
+   815→function checkIfMarketOpen(): boolean {
+   816→  try {
+   817→    const now = new Date();
+   818→    // Convert to IST (UTC+5:30)
+   819→    const istOffset = 5.5 * 60; // minutes
+   820→    const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+   821→    const istMinutes = (utcMinutes + istOffset + 1440) % 1440; // handle wrap
+   822→    const day = now.getUTCDay(); // 0=Sun, 6=Sat
+   823→
+   824→    // Weekend check
+   825→    if (day === 0 || day === 6) return false;
+   826→
+   827→    // 9:15 = 555 minutes, 15:30 = 930 minutes
+   828→    if (istMinutes < 555 || istMinutes > 930) return false;
+   829→
+   830→    return true;
+   831→  } catch {
+   832→    return true; // default to open if can't determine
+   833→  }
+   834→}
+   835→
+   836→
+   837→
+   838→export const useNSEStore = create<NSEStore>()(
+   839→  persist(
+   840→    (set, get) => ({
+   841→  // NIFTY only (selectedSymbol removed)
+   842→  selectedExpiry: "",
+   843→  expiryDates: [],
+   844→  optionChain: null,
+   845→  isLoading: false,
+   846→  isExpiryLoading: false,
+   847→  error: null,
+   848→  autoRefresh: true,
+   849→  refreshInterval: 30,
+   850→  lastUpdated: null,
+   851→
+   852→  snapshots: [],
+   853→  maxSnapshots: 10,
+   854→
+   855→  oiSummary: null,
+   856→
+   857→  signals: [],
+   858→  oiThreshold: 25000,
+   859→
+   860→  trades: [],
+   861→
+   862→  spotPrice: 0,
+   863→
+   864→  snapshotDelta: {} as Record<number, { ceOIChange: number; peOIChange: number; ceLTPChange: number; peLTPChange: number }>,
+   865→  snapshotDeltaTime: null,
+   866→
+   867→  // Semi-auto trading
+   868→  tradeMode: "PAPER" as TradeMode,
+   869→  pendingSignals: [],
+   870→  brokerAccount: null,
+   871→
+   872→  isMarketOpen: false,
+   873→  checkMarketHours: () => {
+   874→    set({ isMarketOpen: checkIfMarketOpen() });
+   875→  },
+   876→
+   877→  // setSymbol removed — NIFTY only
+   878→
+   879→
+   880→  setExpiry: async (expiry) => {
+   881→    // On expiry change, clear only session data (not trades from other expiries if any)
+   882→    // Clear only option chain/session data — keep signals/trades across expiries
+   883→    set({ selectedExpiry: expiry, optionChain: null, error: null, snapshots: [], oiSummary: null, snapshotDelta: {}, snapshotDeltaTime: null });
+   884→    if (expiry) {
+   885→      // Load from disk first. If no data found, allow one NSE fetch
+   886→      // to download the latest closing data for this expiry week.
+   887→      const loaded = await loadFromDisk();
+   888→      if (!loaded) {
+   889→        // No disk data for this expiry — trigger one fetch
+   890→        await get().fetchOptionChain();
+   891→      }
+   892→    }
+   893→  },
+   894→
+   895→  setAutoRefresh: (val) => set({ autoRefresh: val }),
+   896→  setRefreshInterval: (seconds) => set({ refreshInterval: seconds }),
+   897→  setOIThreshold: (threshold) => set({ oiThreshold: threshold }),
+   898→
+   899→  fetchExpiryDates: async () => {
+   900→    set({ isExpiryLoading: true, error: null });
+   901→    try {
+   902→      const res = await fetch(`/api/nse/expiry?symbol=NIFTY`);
+   903→      const resData = await res.json();
+   904→      if (!resData?.expiryDates?.length) throw new Error("Failed to fetch expiry dates from NSE");
+   905→      const expiryDates = resData.expiryDates || [];
+   906→      set({ expiryDates, isExpiryLoading: false });
+   907→      if (expiryDates.length > 0 && !get().selectedExpiry) {
+   908→        set({ selectedExpiry: expiryDates[0] });
+   909→        // Load from disk. If no data found, trigger one NSE fetch
+   910→        // so user sees latest data even when opening off-market.
+   911→        const loaded = await loadFromDisk();
+   912→        if (!loaded) {
+   913→          void get().fetchOptionChain();
+   914→        }
+   915→      }
+   916→    } catch (err: unknown) {
+   917→      set({ error: (err as Error).message, isExpiryLoading: false });
+   918→    }
+   919→  },
+   920→
+   921→  fetchOptionChain: async (forceRefresh = false) => {
+   922→    const { selectedExpiry, snapshots, oiThreshold, trades } = get();
+   923→    if (!selectedExpiry) return;
+   924→
+   925→    // ===== OFF-MARKET GATE =====
+   926→    // Don't fetch from NSE or save snapshots when market is closed.
+   927→    // Live market only: 9:15 AM - 3:30 PM IST, Mon-Fri
+   928→    //
+   929→    // EXCEPTION: If no data exists for current expiry (no snapshots on disk
+   930→    // and no optionChain in state), allow ONE fetch from NSE so the user
+   931→    // sees the latest closing data instead of an empty screen.
+   932→    // This also handles: new expiry week, first-time app open, data wiped.
+   933→    if (!checkIfMarketOpen() && !forceRefresh) {
+   934→      const { optionChain, snapshots } = get();
+   935→      const hasData = optionChain?.chainData?.length > 0 || snapshots.length > 0;
+   936→      // Allow fetch if <2 snapshots exist (need 2 for delta calculation)
+   937→      if (hasData && snapshots.length >= 2) return;
+   938→      // No data or <2 snapshots — allow fetch
+   939→    }
+   940→
+   941→    // ===== LIVE MARKET: Full flow (fetch + save + calc + scan + exit check) =====
+   942→    set({ isLoading: true, error: null });
+   943→    try {
+   944→      const params = new URLSearchParams({
+   945→        symbol: "NIFTY",
+   946→        expiry: selectedExpiry,
+   947→      });
+   948→
+   949→      // Direct fetch from NSE via server API
+   950→      const res = await fetch(`/api/nse/option-chain?${params}`);
+   951→      const data = await res.json();
+   952→      if (!data?.chainData?.length) throw new Error((data as Record<string, unknown>)?.error as string || "Failed to fetch option chain");
+   953→
+   954→      // Save snapshot before updating
+   955→      const currentChain: OptionData[] = data.chainData || [];
+   956→      const spotPrice: number = data.spotPrice || 0;
+   957→
+   958→      if (currentChain.length > 0 && spotPrice > 0) {
+   959→        const newSnapshot: OISnapshot = {
+   960→          timestamp: new Date().toISOString(),
+   961→          expiry: selectedExpiry,
+   962→          spotPrice,
+   963→          strikes: currentChain.map((item: OptionData) => ({
+   964→            strike: item.strikePrice,
+   965→            ceOI: item.CE?.openInterest || 0,
+   966→            peOI: item.PE?.openInterest || 0,
+   967→            ceLTP: item.CE?.lastPrice || 0,
+   968→            peLTP: item.PE?.lastPrice || 0,
+   969→          })),
+   970→        };
+   971→
+   972→        // Persist snapshot to disk immediately and obtain last snapshots from server
+   973→        // to avoid race conditions between write and subsequent read.
+   974→        let prevSnapshot: OISnapshot | null = null;
+   975→        try {
+   976→          const rows = await get().saveSnapshotToCsv(newSnapshot);
+   977→          if (rows && rows.length >= 2) {
+   978→            prevSnapshot = rows[rows.length - 2];
+   979→          } else if (rows && rows.length === 1) {
+   980→            prevSnapshot = rows[0];
+   981→          }
+   982→        } catch {
+   983→          prevSnapshot = null;
+   984→        }
+   985→
+   986→        // ===== Calculate Snapshot-based OI Delta (like Python's get_delta) =====
+   987→        let snapshotDelta: Record<number, { ceOIChange: number; peOIChange: number; ceLTPChange: number; peLTPChange: number }> = {};
+   988→        let snapshotDeltaTime: string | null = null;
+   989→
+   990→        if (prevSnapshot) {
+   991→          const prevMap = new Map<number, { ceOI: number; peOI: number; ceLTP: number; peLTP: number }>();
+   992→          for (const s of prevSnapshot.strikes) {
+   993→            prevMap.set(s.strike, { ceOI: s.ceOI, peOI: s.peOI, ceLTP: s.ceLTP, peLTP: s.peLTP });
+   994→          }
+   995→
+   996→          for (const item of currentChain) {
+   997→            const strike = item.strikePrice;
+   998→            const prev = prevMap.get(strike);
+   999→            if (!prev) continue;
+  1000→
+  1001→            const currCEOI = item.CE?.openInterest || 0;
+  1002→            const currPEOI = item.PE?.openInterest || 0;
+  1003→            const currCELTP = item.CE?.lastPrice || 0;
+  1004→            const currPELTP = item.PE?.lastPrice || 0;
+  1005→
+  1006→            const ceOIChange = currCEOI - prev.ceOI;
+  1007→            const peOIChange = currPEOI - prev.peOI;
+  1008→            const ceLTPChange = prev.ceLTP > 0 ? currCELTP - prev.ceLTP : 0;
+  1009→            const peLTPChange = prev.peLTP > 0 ? currPELTP - prev.peLTP : 0;
+  1010→
+  1011→            if (ceOIChange !== 0 || peOIChange !== 0) {
+  1012→              snapshotDelta[strike] = { ceOIChange, peOIChange, ceLTPChange, peLTPChange };
+  1013→            }
+  1014→          }
+  1015→
+  1016→          snapshotDeltaTime = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
+  1017→
+  1018→          // Persist delta to disk for: app restart, overnight reference, backtesting
+  1019→          if (Object.keys(snapshotDelta).length > 0) {
+  1020→            void get().saveDeltaToFile(prevSnapshot.timestamp);
+  1021→          }
+  1022→        }
+  1023→
+  1024→        // Calculate OI Summary
+  1025→        const oiSummary = calculateOISummary(prevSnapshot, currentChain, spotPrice, selectedExpiry);
+  1026→
+  1027→        // Scan signals using the simplified OI-reduction rule only
+  1028→        const newSignals = scanSignalsImproved(prevSnapshot, currentChain, spotPrice, selectedExpiry, oiThreshold);
+  1029→
+  1030→        for (const sig of newSignals) {
+  1031→          void get().saveSignalToFile(sig);
+  1032→        }
+  1033→
+  1034→        // Check exit conditions on open trades
+  1035→        let updatedTrades = checkExitConditions(currentChain, trades);
+  1036→
+  1037→        // Execute new trades from signals
+  1038→        // In PAPER mode: auto-execute. In SEMI_AUTO mode: add to pending queue
+  1039→        const currentTradeMode = get().tradeMode;
+  1040→
+  1041→        for (const sig of newSignals) {
+  1042→          if (sig.strength < 50) {
+  1043→            sig.skipReason = "Weak signal (<50%)";
+  1044→            sig.status = "REJECTED";
+  1045→            continue;
+  1046→          }
+  1047→          // Max 3 open trades at a time
+  1048→          const openCount = updatedTrades.filter((t) => t.status === "OPEN").length;
+  1049→          if (openCount >= 3) {
+  1050→            sig.skipReason = `Max ${3} open trades reached`;
+  1051→            sig.status = "REJECTED";
+  1052→            continue;
+  1053→          }
+  1054→          // Check if already have open trade at this strike
+  1055→          const existingOpen = updatedTrades.find(
+  1056→            (t) => t.strike === sig.toStrike && t.status === "OPEN"
+  1057→          );
+  1058→          if (existingOpen) {
+  1059→            sig.skipReason = "Already open at this strike";
+  1060→            sig.status = "REJECTED";
+  1061→            continue;
+  1062→          }
+  1063→          // Skip if entry price is invalid
+  1064→          if (!sig.entryPrice || sig.entryPrice <= 0) {
+  1065→            sig.skipReason = "Invalid entry price";
+  1066→            sig.status = "REJECTED";
+  1067→            continue;
+  1068→          }
+  1069→
+  1070→          // PAPER mode: auto-execute the trade
+  1071→          if (currentTradeMode === "PAPER") {
+  1072→            const tradeId = `trade-${Date.now()}-${sig.toStrike}`;
+  1073→            sig.tradeId = tradeId;
+  1074→            sig.executed = true;
+  1075→            sig.status = "EXECUTED";
+  1076→
+  1077→            // Both CALL BUY and PUT BUY are buy positions → stop loss below entry
+  1078→            const initialStop = sig.entryPrice * (1 - INITIAL_STOP_PCT / 100);
+  1079→
+  1080→            updatedTrades.push({
+  1081→              id: tradeId,
+  1082→              time: sig.time,
+  1083→              signalType: sig.type,
+  1084→              strike: sig.toStrike,
+  1085→              entryPrice: sig.entryPrice,
+  1086→              exitPrice: 0,
+  1087→              pnl: 0,
+  1088→              expiry: sig.expiry,
+  1089→              status: "OPEN",
+  1090→              currentStop: initialStop,
+  1091→              highestProfitPct: 0,
+  1092→              maxDrawdownPct: 0,
+  1093→              priceHistory: [{ time: sig.time, price: sig.entryPrice }],
+  1094→              signalId: sig.id,
+  1095→              isRealTrade: true,
+  1096→            });
+  1097→          } else {
+  1098→            // SEMI_AUTO mode: add to pending queue for approval
+  1099→            sig.status = "PENDING";
+  1100→          }
+  1101→        }
+  1102→
+  1103→        // Keep all signals for display
+  1104→        const allSignals = [...get().signals, ...newSignals].slice(-20);
+  1105→
+  1106→        // Only save trades that actually changed to prevent unbounded JSONL growth
+  1107→        const prevTradesMap = new Map<string, Trade>();
+  1108→        for (const t of trades) prevTradesMap.set(t.id, t);
+  1109→        for (const trade of updatedTrades) {
+  1110→          const prev = prevTradesMap.get(trade.id);
+  1111→          if (!prev) {
+  1112→            // New trade — must save
+  1113→            void get().saveTradeToFile(trade);
+  1114→          } else if (prev.status !== trade.status || prev.exitPrice !== trade.exitPrice ||
+  1115→                     prev.currentStop !== trade.currentStop || prev.pnl !== trade.pnl ||
+  1116→                     prev.priceHistory.length !== trade.priceHistory.length) {
+  1117→            // Trade state changed — save
+  1118→            void get().saveTradeToFile(trade);
+  1119→          }
+  1120→        }
+  1121→
+  1122→        set({
+  1123→          optionChain: data as unknown as OptionChainState,
+  1124→          isLoading: false,
+  1125→          lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
+  1126→          spotPrice: spotPrice || 0,
+  1127→          // Keep last 2 snapshots in memory for delta calculation
+  1128→          snapshots: rows ? rows.slice(-2) : [],
+  1129→          oiSummary,
+  1130→          signals: allSignals,
+  1131→          trades: updatedTrades,
+  1132→          snapshotDelta,
+  1133→          snapshotDeltaTime,
+  1134→        });
+  1135→
+  1136→        if (!prevSnapshot) {
+  1137→          // No previous snapshot → load last saved delta from disk (e.g. yesterday's closing)
+  1138→          void get().loadDeltaFromFile();
+  1139→        }
+  1140→      } else {
+  1141→        set({
+  1142→          optionChain: data as unknown as OptionChainState,
+  1143→          isLoading: false,
+  1144→          lastUpdated: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }),
+  1145→        });
+  1146→      }
+  1147→    } catch (err: unknown) {
+  1148→      set({ error: (err as Error).message, isLoading: false });
+  1149→    }
+  1150→  },
+  1151→
+  1152→  saveDeltaToFile: async (prevTimestamp: string) => {
+  1153→    const { selectedExpiry, snapshotDelta, spotPrice } = get();
+  1154→    if (!selectedExpiry || Object.keys(snapshotDelta).length === 0) return;
+  1155→    try {
+  1156→      await fetch("/api/nse/delta-history", {
+  1157→        method: "POST",
+  1158→        headers: { "Content-Type": "application/json" },
+  1159→        body: JSON.stringify({
+  1160→          symbol: "NIFTY",
+  1161→          expiry: selectedExpiry,
+  1162→          timestamp: new Date().toISOString(),
+  1163→          spotPrice,
+  1164→          prevTimestamp,
+  1165→          snapshotDelta,
+  1166→        }),
+  1167→      });
+  1168→    } catch {
+  1169→      // Ignore write failures
+  1170→    }
+  1171→  },
+  1172→
+  1173→  loadDeltaFromFile: async () => {
+  1174→    const { selectedExpiry } = get();
+  1175→    if (!selectedExpiry) return;
+  1176→    try {
+  1177→      const response = await fetch(
+  1178→        `/api/nse/delta-history?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
+  1179→      );
+  1180→      if (!response.ok) return;
+  1181→      const data = await response.json();
+  1182→      if (data?.snapshotDelta) {
+  1183→        set({
+  1184→          snapshotDelta: data.snapshotDelta,
+  1185→          snapshotDeltaTime: data.snapshotDeltaTime || null,
+  1186→        });
+  1187→      }
+  1188→    } catch {
+  1189→      // Ignore read failures
+  1190→    }
+  1191→  },
+  1192→
+  1193→  saveSnapshotToCsv: async (snapshot) => {
+  1194→    if (!snapshot.expiry) return null;
+  1195→    try {
+  1196→      const resp = await fetch("/api/nse/snapshots", {
+  1197→        method: "POST",
+  1198→        headers: { "Content-Type": "application/json" },
+  1199→        body: JSON.stringify({
+  1200→          symbol: "NIFTY",
+  1201→          expiry: snapshot.expiry,
+  1202→          timestamp: snapshot.timestamp,
+  1203→          spotPrice: snapshot.spotPrice,
+  1204→          strikes: snapshot.strikes,
+  1205→        }),
+  1206→      });
+  1207→      if (!resp.ok) return null;
+  1208→      const data = await resp.json();
+  1209→      return Array.isArray(data?.snapshots) ? data.snapshots : null;
+  1210→    } catch {
+  1211→      return null;
+  1212→    }
+  1213→  },
+  1214→
+  1215→  loadSnapshotHistory: async () => {
+  1216→    const { selectedExpiry } = get();
+  1217→    if (!selectedExpiry) return;
+  1218→    try {
+  1219→      const response = await fetch(
+  1220→          `/api/nse/snapshots?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
+  1221→        );
+  1222→      if (!response.ok) return;
+  1223→      const data = await response.json();
+  1224→      if (Array.isArray(data?.snapshots)) {
+  1225→        set({ snapshots: data.snapshots });
+  1226→      }
+  1227→    } catch {
+  1228→      // Ignore read failures
+  1229→    }
+  1230→  },
+  1231→
+  1232→  saveSignalToFile: async (signal) => {
+  1233→    const { selectedExpiry } = get();
+  1234→    if (!signal.expiry && !selectedExpiry) return;
+  1235→    try {
+  1236→      await fetch("/api/nse/signals?symbol=NIFTY", {
+  1237→        method: "POST",
+  1238→        headers: { "Content-Type": "application/json" },
+  1239→        body: JSON.stringify({ ...signal, expiry: signal.expiry || selectedExpiry }),
+  1240→      });
+  1241→    } catch {
+  1242→      // Ignore write failures
+  1243→    }
+  1244→  },
+  1245→
+  1246→  loadSignalsFromFile: async () => {
+  1247→    try {
+  1248→      // Load ALL signals across expiries (single file per symbol)
+  1249→      const response = await fetch(
+  1250→        `/api/nse/signals?symbol=NIFTY&limit=50`
+  1251→      );
+  1252→      if (!response.ok) return;
+  1253→      const data = await response.json();
+  1254→      if (Array.isArray(data?.signals)) {
+  1255→        const normalized = data.signals.map((s: Record<string, unknown>) => ({
+  1256→          createdAt: s.createdAt || new Date().toISOString(),
+  1257→          ...s,
+  1258→        }));
+  1259→        set({ signals: normalized });
+  1260→      }
+  1261→    } catch {
+  1262→      // Ignore read failures
+  1263→    }
+  1264→  },
+  1265→
+  1266→  saveTradeToFile: async (trade) => {
+  1267→    const { selectedExpiry } = get();
+  1268→    if (!trade.expiry && !selectedExpiry) return;
+  1269→    try {
+  1270→      await fetch("/api/nse/trades?symbol=NIFTY", {
+  1271→        method: "POST",
+  1272→        headers: { "Content-Type": "application/json" },
+  1273→        body: JSON.stringify({ ...trade, expiry: trade.expiry || selectedExpiry }),
+  1274→      });
+  1275→    } catch {
+  1276→      // Ignore write failures
+  1277→    }
+  1278→  },
+  1279→
+  1280→  loadTradesFromFile: async () => {
+  1281→    try {
+  1282→      // Load ALL trades across expiries (single file per symbol)
+  1283→      const response = await fetch(
+  1284→        `/api/nse/trades?symbol=NIFTY&limitClosed=20`
+  1285→      );
+  1286→      if (!response.ok) return;
+  1287→      const data = await response.json();
+  1288→      if (Array.isArray(data?.openTrades) && Array.isArray(data?.closedTrades)) {
+  1289→        const normalizedTrades = [...data.openTrades, ...data.closedTrades].map((trade) => ({
+  1290→          createdAt: trade.createdAt || new Date().toISOString(),
+  1291→          ...trade,
+  1292→        }));
+  1293→        set({ trades: normalizedTrades });
+  1294→      }
+  1295→    } catch {
+  1296→      // Ignore read failures
+  1297→    }
+  1298→  },
+  1299→
+  1300→  // Semi-auto trading methods
+  1301→  setTradeMode: (mode) => set({ tradeMode: mode }),
+  1302→
+  1303→  approveSignal: (signalId) => {
+  1304→    const state = get();
+  1305→    const signal = state.signals.find((s) => s.id === signalId);
+  1306→    if (!signal) return;
+  1307→
+  1308→    const isBrokerConnected = state.brokerAccount?.status === "CONNECTED" && state.brokerAccount.broker !== "GROWW";
+  1309→
+  1310→    // Update signal status to APPROVED immediately
+  1311→    const updatedSignals = state.signals.map((s) =>
+  1312→      s.id === signalId
+  1313→        ? { ...s, status: "APPROVED" as const, executed: true, isRealTrade: isBrokerConnected }
+  1314→        : s
+  1315→    );
+  1316→
+  1317→    // Remove from pending queue
+  1318→    const updatedPending = state.pendingSignals.filter((s) => s.id !== signalId);
+  1319→
+  1320→    // Create trade
+  1321→    const trade: Trade = {
+  1322→      id: `trade-${Date.now()}-${signal.toStrike}`,
+  1323→      time: signal.time,
+  1324→      createdAt: new Date().toISOString(),
+  1325→      signalType: signal.type,
+  1326→      strike: signal.toStrike,
+  1327→      entryPrice: signal.entryPrice,
+  1328→      exitPrice: 0,
+  1329→      pnl: 0,
+  1330→      expiry: signal.expiry,
+  1331→      status: "OPEN",
+  1332→      currentStop: signal.entryPrice * (1 - INITIAL_STOP_PCT / 100),
+  1333→      highestProfitPct: 0,
+  1334→      maxDrawdownPct: 0,
+  1335→      priceHistory: [{ time: signal.time, price: signal.entryPrice }],
+  1336→      signalId: signal.id,
+  1337→      isRealTrade: isBrokerConnected,
+  1338→      brokerName: isBrokerConnected ? state.brokerAccount?.broker : undefined,
+  1339→    };
+  1340→
+  1341→    set({
+  1342→      signals: updatedSignals,
+  1343→      pendingSignals: updatedPending,
+  1344→      trades: [...state.trades, trade],
+  1345→    });
+  1346→    void get().saveSignalToFile(updatedSignals.find((s) => s.id === signalId) ?? signal);
+  1347→    void get().saveTradeToFile(trade);
+  1348→
+  1349→    // If broker is connected, place real order via API
+  1350→    if (isBrokerConnected && state.brokerAccount) {
+  1351→      const acc = state.brokerAccount;
+  1352→      const symbol = "NIFTY";
+  1353→      fetch("/api/broker/place-order", {
+  1354→        method: "POST",
+  1355→        headers: { "Content-Type": "application/json" },
+  1356→        body: JSON.stringify({
+  1357→          broker: acc.broker,
+  1358→          accessToken: acc.accessToken,
+  1359→          apiKey: acc.apiKey,
+  1360→          apiSecret: acc.apiSecret,
+  1361→          symbol,
+  1362→          strikePrice: signal.toStrike,
+  1363→          optionType: signal.type.includes("CALL") ? "CE" : "PE",
+  1364→          transactionType: "BUY",
+  1365→          quantity: LOT_SIZES[symbol] || LOT_SIZE,
+  1366→          price: signal.entryPrice,
+  1367→          orderType: "MARKET",
+  1368→          product: "MIS",
+  1369→        }),
+  1370→      })
+  1371→        .then((res) => res.json())
+  1372→        .then((data) => {
+  1373→          if (data.success && data.orderId) {
+  1374→            // Update the trade with real broker order ID
+  1375→            const { trades: currentTrades } = get();
+  1376→            const updatedTrades = currentTrades.map((t) =>
+  1377→              t.id === trade.id
+  1378→                ? { ...t, brokerOrderId: data.orderId }
+  1379→                : t
+  1380→            );
+  1381→            // Mark signal as EXECUTED with order ID
+  1382→            const { signals: currentSignals } = get();
+  1383→            const finalSignals = currentSignals.map((s) =>
+  1384→              s.id === signalId ? { ...s, tradeId: trade.id, status: "EXECUTED" as const, brokerOrderId: data.orderId } : s
+  1385→            );
+  1386→            set({ trades: updatedTrades, signals: finalSignals });
+  1387→            console.log(`Real order placed: ${data.orderId} — ${data.message}`);
+  1388→          } else {
+  1389→            console.error(`Order placement failed: ${data.error}`);
+  1390→          }
+  1391→        })
+  1392→        .catch((err) => {
+  1393→          console.error("Failed to place real order:", err);
+  1394→        });
+  1395→    }
+  1396→  },
+  1397→
+  1398→  rejectSignal: (signalId) => {
+  1399→    const state = get();
+  1400→    const updatedSignals = state.signals.map((s) =>
+  1401→      s.id === signalId ? { ...s, status: "REJECTED" as const, executed: false } : s
+  1402→    );
+  1403→    const updatedPending = state.pendingSignals.filter((s) => s.id !== signalId);
+  1404→    set({ signals: updatedSignals, pendingSignals: updatedPending });
+  1405→    const rejected = updatedSignals.find((s) => s.id === signalId);
+  1406→    if (rejected) {
+  1407→      void get().saveSignalToFile(rejected);
+  1408→    }
+  1409→  },
+  1410→
+  1411→  closeTrade: (tradeId) => {
+  1412→    const state = get();
+  1413→    const trade = state.trades.find((t) => t.id === tradeId);
+  1414→    if (!trade || trade.status !== "OPEN") return;
+  1415→
+  1416→    // Get current LTP from option chain for exit price
+  1417→    const chainData = state.optionChain?.chainData;
+  1418→    let exitPrice = trade.entryPrice; // fallback to entry if no LTP available
+  1419→    if (chainData && Array.isArray(chainData)) {
+  1420→      for (const rawItem of chainData) {
+  1421→        const item = rawItem as unknown as { strikePrice?: number; CE?: { lastPrice?: number }; PE?: { lastPrice?: number } };
+  1422→        if (item.strikePrice === trade.strike) {
+  1423→          exitPrice = trade.signalType === "BULLISH"
+  1424→            ? (item.CE?.lastPrice || trade.entryPrice)
+  1425→            : (item.PE?.lastPrice || trade.entryPrice);
+  1426→          break;
+  1427→        }
+  1428→      }
+  1429→    }
+  1430→
+  1431→    const pnl = (exitPrice - trade.entryPrice) * LOT_SIZE;
+  1432→    const profitPct = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+  1433→    const now = new Date();
+  1434→    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+  1435→
+  1436→    const updatedTrade: Trade = {
+  1437→      ...trade,
+  1438→      status: "CLOSED",
+  1439→      exitPrice,
+  1440→      pnl,
+  1441→      highestProfitPct: Math.max(trade.highestProfitPct, profitPct > 0 ? profitPct : 0),
+  1442→      priceHistory: [...trade.priceHistory, { time: timeStr, price: exitPrice }],
+  1443→    };
+  1444→
+  1445→    const updatedTrades = state.trades.map((t) =>
+  1446→      t.id === tradeId ? updatedTrade : t
+  1447→    );
+  1448→    set({ trades: updatedTrades });
+  1449→    void get().saveTradeToFile(updatedTrade);
+  1450→
+  1451→    // If real trade with broker, place exit order (SELL)
+  1452→    if (trade.isRealTrade && trade.brokerName && state.brokerAccount) {
+  1453→      const acc = state.brokerAccount;
+  1454→      fetch("/api/broker/place-order", {
+  1455→        method: "POST",
+  1456→        headers: { "Content-Type": "application/json" },
+  1457→        body: JSON.stringify({
+  1458→          broker: acc.broker,
+  1459→          accessToken: acc.accessToken,
+  1460→          apiKey: acc.apiKey,
+  1461→          apiSecret: acc.apiSecret,
+  1462→          symbol: "NIFTY",
+  1463→          strikePrice: trade.strike,
+  1464→          optionType: trade.signalType === "BULLISH" ? "CE" : "PE",
+  1465→          transactionType: "SELL",
+  1466→          quantity: LOT_SIZES["NIFTY"] || LOT_SIZE,
+  1467→          price: exitPrice,
+  1468→          orderType: "MARKET",
+  1469→          product: "MIS",
+  1470→        }),
+  1471→      })
+  1472→        .then((res) => res.json())
+  1473→        .then((data) => {
+  1474→          if (data.success) {
+  1475→            console.log(`Manual close order placed: ${data.orderId}`);
+  1476→          } else {
+  1477→            console.error(`Close order failed: ${data.error}`);
+  1478→          }
+  1479→        })
+  1480→        .catch((err) => {
+  1481→          console.error("Failed to place close order:", err);
+  1482→        });
+  1483→    }
+  1484→  },
+  1485→
+  1486→  closeAllTrades: () => {
+  1487→    const state = get();
+  1488→    const openTrades = state.trades.filter((t) => t.status === "OPEN");
+  1489→    if (openTrades.length === 0) return;
+  1490→
+  1491→    // Close each open trade
+  1492→    for (const trade of openTrades) {
+  1493→      get().closeTrade(trade.id);
+  1494→    }
+  1495→  },
+  1496→
+  1497→  connectBroker: (account) => {
+  1498→    set({ brokerAccount: { ...account, status: "CONNECTED", connectedAt: new Date().toISOString() } });
+  1499→  },
+  1500→
+  1501→  disconnectBroker: () => {
+  1502→    const current = get().brokerAccount;
+  1503→    if (current) {
+  1504→      set({ brokerAccount: { ...current, status: "DISCONNECTED", connectedAt: null } });
+  1505→    }
+  1506→  },
+  1507→
+  1508→  updateBrokerBalance: (balance) => {
+  1509→    const current = get().brokerAccount;
+  1510→    if (current) {
+  1511→      set({ brokerAccount: { ...current, balance } });
+  1512→    }
+  1513→  },
+  1514→}),
+  1515→{
+  1516→  name: "nse-options-store",
+  1517→  // Save only core data to localStorage; snapshots, signals, and trades are stored on the server
+  1518→  partialize: (state) => ({
+  1519→    // selectedSymbol removed from persist — NIFTY only
+  1520→    selectedExpiry: state.selectedExpiry,
+  1521→    autoRefresh: state.autoRefresh,
+  1522→    refreshInterval: state.refreshInterval,
+  1523→    oiThreshold: state.oiThreshold,
+  1524→    lastUpdated: state.lastUpdated,
+  1525→    optionChain: state.optionChain,
+  1526→    spotPrice: state.spotPrice,
+  1527→    oiSummary: state.oiSummary,
+  1528→    tradeMode: state.tradeMode,
+  1529→    pendingSignals: state.pendingSignals,
+  1530→    brokerAccount: state.brokerAccount,
+  1531→  }),
+  1532→}
+  1533→)
+  1534→);
+  1535→
