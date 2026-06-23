@@ -35,10 +35,10 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Data (JSON/JSONL files generated at runtime — never commit)
-# Keep .gitkeep files for directory structure
-data/**
-!data/**/.gitkeep
+# Data — track snapshots, trades, signals, delta-history for GitHub backup
+# Only ignore tool-results and temp files
+data/tool-results/
+tool-results/
 
 # Prisma
 prisma/*.db
