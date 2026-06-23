@@ -971,8 +971,9 @@ export const useNSEStore = create<NSEStore>()(
         // Persist snapshot to disk immediately and obtain last snapshots from server
         // to avoid race conditions between write and subsequent read.
         let prevSnapshot: OISnapshot | null = null;
+        let rows: OISnapshot[] | null = null;
         try {
-          const rows = await get().saveSnapshotToCsv(newSnapshot);
+          rows = await get().saveSnapshotToCsv(newSnapshot);
           if (rows && rows.length >= 2) {
             prevSnapshot = rows[rows.length - 2];
           } else if (rows && rows.length === 1) {
