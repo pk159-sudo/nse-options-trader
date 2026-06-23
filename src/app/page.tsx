@@ -634,7 +634,7 @@ export default function NSEOptionsTool() {
   const chainData = optionChain?.chainData;
 
   return (
-    <div className="min-h-screen t-bg-main t-text-1">
+    <div className="min-h-screen t-bg-main t-text-1" suppressHydrationWarning>
       {/* Header */}
       <header className="t-border-main border-b t-bg-header backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-[1800px] mx-auto px-4 py-3">

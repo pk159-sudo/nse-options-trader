@@ -1228,7 +1228,7 @@ export const useNSEStore = create<NSEStore>()(
 
   loadSnapshotHistory: async () => {
     const { selectedExpiry } = get();
-    if (!selectedExpiry) return;
+    if (!selectedExpiry || selectedExpiry.length < 4) return;
     try {
       const response = await fetch(
           `/api/nse/snapshots?symbol=NIFTY&expiry=${encodeURIComponent(selectedExpiry)}`
@@ -1536,13 +1536,24 @@ export const useNSEStore = create<NSEStore>()(
     refreshInterval: state.refreshInterval,
     oiThreshold: state.oiThreshold,
     lastUpdated: state.lastUpdated,
-    optionChain: state.optionChain,
-    spotPrice: state.spotPrice,
-    oiSummary: state.oiSummary,
+    // optionChain, oiSummary, spotPrice — NOT persisted to avoid hydration mismatch
+    // They are large objects that change every 30s; re-fetching is cheap.
     tradeMode: state.tradeMode,
     pendingSignals: state.pendingSignals,
     brokerAccount: state.brokerAccount,
   }),
+  onRehydrateStorage: () => {
+    return (state) => {
+      // After hydration, clear stale session data so fresh fetch happens
+      if (state) {
+        state.optionChain = null;
+        state.oiSummary = null;
+        state.spotPrice = 0;
+        state.snapshotDelta = {};
+        state.snapshotDeltaTime = null;
+      }
+    };
+  },
 }
 )
 );
