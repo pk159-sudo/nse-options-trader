@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
+import { getFile, putFile } from "@/lib/github-storage";
 
 type Trade = {
   id: string;
@@ -20,48 +19,15 @@ type Trade = {
   isRealTrade?: boolean;
   brokerOrderId?: string;
   brokerName?: string;
+  createdAt?: string;
 };
-
-const ROOT = path.join(process.cwd(), "data", "trades");
 
 function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
 function getFilePath(symbol: string, expiry: string) {
-  return path.join(ROOT, safeName(symbol), safeName(expiry), "trades.jsonl");
-}
-
-async function ensureFile(symbol: string, expiry: string) {
-  const filePath = getFilePath(symbol, expiry);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  try {
-    await fs.access(filePath);
-  } catch {
-    await fs.writeFile(filePath, "", "utf-8");
-  }
-}
-
-async function readTrades(symbol: string, expiry: string): Promise<Trade[]> {
-  try {
-    await ensureFile(symbol, expiry);
-    const filePath = getFilePath(symbol, expiry);
-    const content = await fs.readFile(filePath, "utf-8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line) as Trade;
-        } catch {
-          return null;
-        }
-      })
-      .filter((trade): trade is Trade => trade !== null);
-  } catch {
-    return [];
-  }
+  return `data/trades/${safeName(symbol)}/${safeName(expiry)}/trades.jsonl`;
 }
 
 export async function GET(request: NextRequest) {
@@ -74,35 +40,73 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "symbol and expiry are required" }, { status: 400 });
   }
 
-  const records = await readTrades(symbol, expiry);
-  const latestById = new Map<string, Trade>();
-  for (const record of records) {
-    latestById.set(record.id, record);
+  try {
+    const filePath = getFilePath(symbol, expiry);
+    const file = await getFile(filePath);
+
+    if (!file) {
+      return NextResponse.json({ openTrades: [], closedTrades: [] });
+    }
+
+    const records: Trade[] = file.content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as Trade;
+        } catch {
+          return null;
+        }
+      })
+      .filter((t): t is Trade => t !== null);
+
+    // Deduplicate by id (keep latest version)
+    const latestById = new Map<string, Trade>();
+    for (const record of records) {
+      latestById.set(record.id, record);
+    }
+
+    const allTrades = Array.from(latestById.values());
+    const openTrades = allTrades.filter((t) => t.status === "OPEN");
+    const closedTrades = allTrades
+      .filter((t) => t.status === "CLOSED")
+      .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+      .slice(0, limitClosed);
+
+    return NextResponse.json({ openTrades, closedTrades });
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
-
-  const allTrades = Array.from(latestById.values());
-  const openTrades = allTrades.filter((t) => t.status === "OPEN");
-  const closedTrades = allTrades
-    .filter((t) => t.status === "CLOSED")
-    .sort((a, b) => (new Date(b.time).getTime() - new Date(a.time).getTime()))
-    .slice(0, limitClosed);
-
-  return NextResponse.json({ openTrades, closedTrades });
 }
 
 export async function POST(request: NextRequest) {
   const url = new URL(request.url);
   const symbol = url.searchParams.get("symbol") || "";
   const expiry = url.searchParams.get("expiry") || "";
-  const trade = await request.json() as Trade;
 
-  if (!symbol || !expiry || !trade?.id || !trade?.time) {
-    return NextResponse.json({ error: "symbol, expiry, and trade payload are required" }, { status: 400 });
+  if (!symbol || !expiry) {
+    return NextResponse.json({ error: "symbol and expiry are required" }, { status: 400 });
   }
 
-  await ensureFile(symbol, expiry);
-  const filePath = getFilePath(symbol, expiry);
-  await fs.appendFile(filePath, `${JSON.stringify(trade)}\n`, "utf-8");
+  try {
+    const trade = (await request.json()) as Trade;
 
-  return NextResponse.json({ success: true });
+    if (!trade?.id || !trade?.time) {
+      return NextResponse.json({ error: "Invalid trade payload" }, { status: 400 });
+    }
+
+    const filePath = getFilePath(symbol, expiry);
+    const existing = await getFile(filePath);
+    let content = existing ? existing.content : "";
+    let sha = existing?.sha;
+
+    // Append line
+    content += JSON.stringify(trade) + "\n";
+    await putFile(filePath, content, sha);
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+  }
 }

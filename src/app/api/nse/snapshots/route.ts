@@ -1,20 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
-
-// ===== Each snapshot is saved as individual JSON file =====
-// File naming: snapshot-{timestamp}.json (e.g. snapshot-2026-05-27T05-09-23-560Z.json)
-// All snapshots are kept permanently for backtesting.
-// For delta calculation, only the last 2 (latest) snapshots are compared.
-//
-// Why individual files instead of single CSV?
-// - CSV grows to ~109 MB/month, reading entire file every 30s kills performance
-// - Individual files: POST writes 1 small file + reads only 2 small files for delta
-// - GET with ?limit=2 reads only 2 files, not thousands of rows
-// - All historical data preserved for backtesting
-//
-// Disk usage: ~7 KB per snapshot × 750/day × 22 days ≈ 115 MB/month (same as CSV)
-// But performance stays constant — always O(1) file reads for delta, never O(n)
+import { getFile, putFile, listFiles } from "@/lib/github-storage";
 
 type OISnapshot = {
   timestamp: string;
@@ -31,14 +16,8 @@ type OISnapshot = {
 
 type SnapshotRow = OISnapshot & { symbol: string };
 
-const SNAPSHOT_ROOT = path.join(process.cwd(), "data", "snapshots");
-
 function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-function getDirPath(symbol: string, expiry: string) {
-  return path.join(SNAPSHOT_ROOT, safeName(symbol), safeName(expiry));
 }
 
 // "2026-05-27T05:09:23.560Z" → "snapshot-2026-05-27T05-09-23-560Z.json"
@@ -46,30 +25,15 @@ function timestampToFilename(ts: string) {
   return `snapshot-${ts.replace(/[:.]/g, "-")}.json`;
 }
 
-// List snapshot files sorted chronologically (oldest first, newest last)
-async function listSnapshotFiles(dirPath: string): Promise<string[]> {
-  try {
-    const files = await fs.readdir(dirPath);
-    return files
-      .filter((f) => f.startsWith("snapshot-") && f.endsWith(".json"))
-      .sort();
-  } catch {
-    return [];
-  }
+// We use a "head" file per symbol/expiry that stores ONLY the last 2 snapshots
+// as a JSON array. This keeps the file tiny (~14KB) and fast to read/write.
+// For backtesting, all snapshots are also saved as individual files.
+function getHeadPath(symbol: string, expiry: string) {
+  return `data/snapshots/${safeName(symbol)}/${safeName(expiry)}/head.json`;
 }
 
-async function readSnapshotFile(
-  dirPath: string,
-  filename: string,
-  symbol: string
-): Promise<SnapshotRow | null> {
-  try {
-    const content = await fs.readFile(path.join(dirPath, filename), "utf-8");
-    const data = JSON.parse(content) as OISnapshot;
-    return { ...data, symbol };
-  } catch {
-    return null;
-  }
+function getArchivePath(symbol: string, expiry: string, filename: string) {
+  return `data/snapshots/${safeName(symbol)}/${safeName(expiry)}/${filename}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -86,63 +50,94 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const dirPath = getDirPath(symbol, expiry);
-  const files = await listSnapshotFiles(dirPath);
+  try {
+    const headPath = getHeadPath(symbol, expiry);
+    const file = await getFile(headPath);
 
-  // Take last N files (newest first in response)
-  const selectedFiles = files.slice(-limit);
+    if (!file) {
+      return NextResponse.json({ snapshots: [] });
+    }
 
-  const snapshots: SnapshotRow[] = [];
-  for (const file of selectedFiles) {
-    const row = await readSnapshotFile(dirPath, file, symbol);
-    if (row) snapshots.push(row);
+    const snapshots: SnapshotRow[] = JSON.parse(file.content);
+    // Add symbol
+    for (const s of snapshots) {
+      s.symbol = symbol;
+    }
+
+    // Return last N
+    const sliced = limit < Infinity ? snapshots.slice(-limit) : snapshots;
+    return NextResponse.json({ snapshots: sliced });
+  } catch (err) {
+    return NextResponse.json(
+      { error: (err as Error).message },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json({ snapshots });
 }
 
 export async function POST(request: NextRequest) {
-  const payload = await request.json();
-  const { symbol, expiry, timestamp, spotPrice, strikes } = payload as {
-    symbol?: string;
-    expiry?: string;
-    timestamp?: string;
-    spotPrice?: number;
-    strikes?: OISnapshot["strikes"];
-  };
+  try {
+    const payload = await request.json();
+    const { symbol, expiry, timestamp, spotPrice, strikes } = payload as {
+      symbol?: string;
+      expiry?: string;
+      timestamp?: string;
+      spotPrice?: number;
+      strikes?: OISnapshot["strikes"];
+    };
 
-  if (
-    !symbol ||
-    !expiry ||
-    !timestamp ||
-    typeof spotPrice !== "number" ||
-    !Array.isArray(strikes)
-  ) {
-    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+    if (
+      !symbol ||
+      !expiry ||
+      !timestamp ||
+      typeof spotPrice !== "number" ||
+      !Array.isArray(strikes)
+    ) {
+      return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+    }
+
+    const newSnapshot: OISnapshot = { timestamp, expiry, spotPrice, strikes };
+
+    // 1. Read current head (last 2 snapshots)
+    const headPath = getHeadPath(symbol, expiry);
+    const existing = await getFile(headPath);
+    let currentSnapshots: OISnapshot[] = [];
+    let sha: string | undefined;
+
+    if (existing) {
+      try {
+        currentSnapshots = JSON.parse(existing.content);
+        sha = existing.sha;
+      } catch {
+        currentSnapshots = [];
+      }
+    }
+
+    // 2. Append new snapshot, keep only last 2
+    currentSnapshots.push(newSnapshot);
+    if (currentSnapshots.length > 2) {
+      currentSnapshots = currentSnapshots.slice(-2);
+    }
+
+    // 3. Write head file back
+    const headContent = JSON.stringify(currentSnapshots, null, 0);
+    await putFile(headPath, headContent, sha);
+
+    // 4. Save individual archive file for backtesting (fire & forget)
+    const archivePath = getArchivePath(symbol, expiry, timestampToFilename(timestamp));
+    putFile(archivePath, JSON.stringify(newSnapshot)).catch(() => {});
+
+    // 5. Return last 2 with symbol
+    const snapshots: SnapshotRow[] = currentSnapshots.map((s) => ({
+      ...s,
+      symbol,
+    }));
+
+    return NextResponse.json({ success: true, snapshots });
+  } catch (err) {
+    return NextResponse.json(
+      { error: (err as Error).message },
+      { status: 500 }
+    );
   }
-
-  const dirPath = getDirPath(symbol, expiry);
-  await fs.mkdir(dirPath, { recursive: true });
-
-  // 1. Save new snapshot as individual JSON file (append, never overwrite history)
-  const snapshotData: OISnapshot = { timestamp, expiry, spotPrice, strikes };
-  const filename = timestampToFilename(timestamp);
-  await fs.writeFile(
-    path.join(dirPath, filename),
-    JSON.stringify(snapshotData),
-    "utf-8"
-  );
-
-  // 2. List all files, pick only last 2 for delta comparison
-  // No deletion — all snapshots kept for backtesting
-  const allFiles = await listSnapshotFiles(dirPath);
-  const lastTwoFiles = allFiles.slice(-2);
-
-  const snapshots: SnapshotRow[] = [];
-  for (const file of lastTwoFiles) {
-    const row = await readSnapshotFile(dirPath, file, symbol);
-    if (row) snapshots.push(row);
-  }
-
-  return NextResponse.json({ success: true, snapshots });
 }
