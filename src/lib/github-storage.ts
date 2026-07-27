@@ -6,8 +6,9 @@
 // Each save = 2 calls (GET + PUT), each load = 1 call (GET).
 
 const GITHUB_API = "https://api.github.com";
-const OWNER = "pk159-sudo";
-const REPO = "nse-options-trader";
+const OWNER = process.env.GITHUB_DATA_OWNER || "pk159-sudo";
+// Use separate data repo to avoid triggering Vercel deploy on every snapshot save
+const REPO = process.env.GITHUB_DATA_REPO || "nse-options-trader-data";
 
 function getToken(): string {
   const token = process.env.GITHUB_TOKEN;
